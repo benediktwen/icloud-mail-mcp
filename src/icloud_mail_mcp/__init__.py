@@ -30,6 +30,11 @@ def _build_app() -> FastMCP:
         ),
     )
 
+    @mcp.custom_route("/health", methods=["GET"])
+    async def health(_request: Request):
+        from starlette.responses import JSONResponse
+        return JSONResponse({"status": "ok"})
+
     # GitHub OAuth callback — browser lands here after approving on github.com
     @mcp.custom_route("/auth/callback", methods=["GET"])
     async def github_callback(request: Request) -> RedirectResponse:
