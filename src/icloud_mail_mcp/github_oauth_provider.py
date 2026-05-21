@@ -22,10 +22,10 @@ from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
 from upstash_redis import Redis
 
 TOKEN_STORE_KEY: str = os.getenv("TOKEN_STORE_KEY", "icloud-mail-mcp")
-GITHUB_ALLOWED_USER: str = os.getenv("GITHUB_ALLOWED_USER", "benediktwen")
+GITHUB_ALLOWED_USER: str = os.getenv("GITHUB_ALLOWED_USER", "")
 GITHUB_CLIENT_ID: str = os.getenv("GITHUB_CLIENT_ID", "")
 GITHUB_CLIENT_SECRET: str = os.getenv("GITHUB_CLIENT_SECRET", "")
-SERVER_URL: str = os.getenv("SERVER_URL", "http://localhost:8000")
+SERVER_URL: str = os.getenv("SERVER_URL", "")
 
 TOKEN_TTL = 60 * 60 * 24 * 30  # 30 days
 CODE_TTL = 60 * 10  # 10 minutes
