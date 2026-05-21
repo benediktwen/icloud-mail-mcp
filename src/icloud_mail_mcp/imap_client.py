@@ -10,11 +10,15 @@ import os
 import re
 import time
 from email.header import decode_header, make_header
-from email.utils import parseaddr, parsedate_to_datetime
-from typing import Any
+from email.mime.text import MIMEText
+from email.utils import formatdate, make_msgid, parseaddr, parsedate_to_datetime
 
 IMAP_HOST = "imap.mail.me.com"
 IMAP_PORT = 993
+
+# iCloud folder name constants
+TRASH_FOLDER  = "Deleted Messages"
+DRAFTS_FOLDER = "Drafts"
 
 
 def _decode_header(value: str | None) -> str:
@@ -35,7 +39,7 @@ class IMAPClient:
     def _connect(self) -> imaplib.IMAP4_SSL:
         conn = imaplib.IMAP4_SSL(IMAP_HOST, IMAP_PORT)
         conn.login(
-            os.environ["ICLOUD_EMAIL"],
+            os.environ["ICLOUD_USERNAME"],
             os.environ["ICLOUD_APP_PASSWORD"],
         )
         return conn
@@ -90,7 +94,6 @@ class IMAPClient:
                 if not item:
                     continue
                 decoded = item.decode("utf-8") if isinstance(item, bytes) else item
-                # Parse: (\HasNoChildren) "/" "INBOX"
                 m = re.search(r'"([^"]+)"$', decoded)
                 if m:
                     folders.append(m.group(1))
@@ -102,33 +105,130 @@ class IMAPClient:
 
         return self._with_reconnect(_run)
 
-    def move_to_folder(self, uid: str, destination: str) -> None:
+    # ------------------------------------------------------------------
+    # Flag operations
+    # ------------------------------------------------------------------
+
+    def mark_read(self, uid: str, folder: str = "INBOX") -> None:
         def _run(conn):
-            self._select(conn, "INBOX")
+            self._select(conn, folder)
+            conn.uid("STORE", uid, "+FLAGS", r"(\Seen)")
+        self._with_reconnect(_run)
+
+    def mark_unread(self, uid: str, folder: str = "INBOX") -> None:
+        def _run(conn):
+            self._select(conn, folder)
+            conn.uid("STORE", uid, "-FLAGS", r"(\Seen)")
+        self._with_reconnect(_run)
+
+    def flag_email(self, uid: str, folder: str = "INBOX") -> None:
+        def _run(conn):
+            self._select(conn, folder)
+            conn.uid("STORE", uid, "+FLAGS", r"(\Flagged)")
+        self._with_reconnect(_run)
+
+    def unflag_email(self, uid: str, folder: str = "INBOX") -> None:
+        def _run(conn):
+            self._select(conn, folder)
+            conn.uid("STORE", uid, "-FLAGS", r"(\Flagged)")
+        self._with_reconnect(_run)
+
+    # ------------------------------------------------------------------
+    # Move / delete
+    # ------------------------------------------------------------------
+
+    def move_to_folder(self, uid: str, destination: str, source_folder: str = "INBOX") -> None:
+        def _run(conn):
+            self._select(conn, source_folder)
             conn.uid("COPY", uid, f'"{destination}"')
             conn.uid("STORE", uid, "+FLAGS", r"(\Deleted)")
             conn.expunge()
-
         self._with_reconnect(_run)
 
-    # ------------------------------------------------------------------
-    # Message operations
-    # ------------------------------------------------------------------
-
-    def mark_read(self, uid: str) -> None:
+    def delete_email(self, uid: str, folder: str = "INBOX") -> None:
+        """Move email to Trash (Deleted Messages)."""
         def _run(conn):
-            # UID might be in any folder — search INBOX first, then All Mail
-            for folder in ["INBOX", "All Mail", "[Gmail]/All Mail"]:
-                try:
-                    self._select(conn, folder)
-                    typ, data = conn.uid("STORE", uid, "+FLAGS", r"(\Seen)")
-                    if typ == "OK":
-                        return
-                except Exception:
-                    continue
-            raise ValueError(f"Message UID {uid!r} not found in accessible folders")
-
+            self._select(conn, folder)
+            # Try iCloud trash folder; fall back to permanent delete if not found
+            typ, _ = conn.uid("COPY", uid, f'"{TRASH_FOLDER}"')
+            if typ == "OK":
+                conn.uid("STORE", uid, "+FLAGS", r"(\Deleted)")
+                conn.expunge()
+            else:
+                # Trash folder not accessible — permanent delete
+                conn.uid("STORE", uid, "+FLAGS", r"(\Deleted)")
+                conn.expunge()
         self._with_reconnect(_run)
+
+    # ------------------------------------------------------------------
+    # Draft creation
+    # ------------------------------------------------------------------
+
+    def create_draft_reply(self, uid: str, folder: str, reply_text: str) -> dict:
+        """Fetch original message and append a reply draft to the Drafts folder."""
+
+        def _run(conn):
+            self._select(conn, folder)
+            typ, msg_data = conn.uid("FETCH", uid, "(RFC822)")
+            if typ != "OK" or not msg_data or not msg_data[0]:
+                raise ValueError(f"Message {uid!r} not found in {folder!r}")
+
+            original = email.message_from_bytes(msg_data[0][1])
+
+            orig_from    = _decode_header(original.get("From", ""))
+            orig_subject = _decode_header(original.get("Subject", ""))
+            orig_date    = original.get("Date", "")
+            orig_msg_id  = original.get("Message-ID", "")
+
+            # Format subject
+            subject = orig_subject if orig_subject.lower().startswith("re:") else f"Re: {orig_subject}"
+
+            # Format attribution line (Apple Mail style)
+            try:
+                dt = parsedate_to_datetime(orig_date)
+                formatted_date = dt.strftime("%-d %b %Y, at %H:%M")
+            except Exception:
+                formatted_date = orig_date
+            attribution = f"On {formatted_date}, {orig_from} wrote:"
+
+            # Quote original body
+            orig_body = _extract_body(original)
+            quoted = "\n".join(f"> {line}" for line in orig_body.splitlines())
+
+            # Assemble body
+            body = f"{reply_text}\n\n{attribution}\n\n{quoted}"
+
+            # Build the draft message
+            my_address = os.environ["ICLOUD_USERNAME"]
+            draft = MIMEText(body, "plain", "utf-8")
+            draft["From"]    = my_address
+            draft["To"]      = orig_from
+            draft["Subject"] = subject
+            draft["Date"]    = formatdate(localtime=True)
+            draft["Message-ID"] = make_msgid()
+            if orig_msg_id:
+                draft["In-Reply-To"] = orig_msg_id
+                draft["References"]  = orig_msg_id
+
+            raw = draft.as_bytes()
+            conn.append(
+                f'"{DRAFTS_FOLDER}"',
+                "\\Draft",
+                imaplib.Time2Internaldate(time.time()),
+                raw,
+            )
+
+            return {
+                "ok": True,
+                "draft_to": orig_from,
+                "subject": subject,
+            }
+
+        return self._with_reconnect(_run)
+
+    # ------------------------------------------------------------------
+    # Search / fetch
+    # ------------------------------------------------------------------
 
     def search(
         self,
@@ -138,7 +238,7 @@ class IMAPClient:
         since: str | None = None,
         before: str | None = None,
         max_results: int = 20,
-    ) -> list[dict[str, Any]]:
+    ) -> list[dict]:
         """Search messages. Returns list of {id, subject, from, date, snippet}."""
 
         def _run(conn):
@@ -162,7 +262,7 @@ class IMAPClient:
                 return []
 
             uids = data[0].split()
-            uids = uids[-max_results:]  # most recent last
+            uids = uids[-max_results:]
 
             if not uids:
                 return []
@@ -193,12 +293,12 @@ class IMAPClient:
                     }
                 )
 
-            results.reverse()  # newest first
+            results.reverse()
             return results
 
         return self._with_reconnect(_run)
 
-    def get_email(self, uid: str, folder: str = "INBOX") -> dict[str, Any]:
+    def get_email(self, uid: str, folder: str = "INBOX") -> dict:
         """Fetch a full message by UID."""
 
         def _run(conn):
