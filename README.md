@@ -7,15 +7,21 @@ connection.
 
 ## What it does
 
-Exposes 5 mail tools via MCP so Claude can interact with your iCloud Mail directly:
+Exposes 11 mail tools via MCP so Claude can interact with your iCloud Mail directly:
 
 | Tool | Description |
 |---|---|
 | `search_emails` | Search by query, date range, unread flag. Returns `{id, subject, from, date, snippet}` |
 | `get_email` | Fetch full message body by UID |
 | `list_labels` | List all IMAP folders / labels |
-| `label_email` | Move a message to a folder |
+| `move_email` | Move a message to a different folder |
+| `delete_email` | Move a message to Trash (Deleted Messages) |
 | `mark_read` | Mark a message as read |
+| `mark_unread` | Mark a message as unread |
+| `flag_email` | Flag (star) a message |
+| `unflag_email` | Remove the flag from a message |
+| `create_draft` | Create a new draft email in the Drafts folder |
+| `create_draft_reply` | Create a pre-filled reply draft for an existing message |
 
 ## How it works
 
