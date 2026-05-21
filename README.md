@@ -1,16 +1,13 @@
-# icloud-mail-mcp
+# iCloud Mail MCP
 
-iCloud Mail MCP server. Exposes five tools — `search_emails`, `get_email`,
-`list_labels`, `label_email`, `mark_read` — over Streamable HTTP with GitHub
-OAuth authentication.
+Remote MCP server for Apple iCloud Mail via IMAP. Connects Claude to your iCloud
+mailbox over the internet — no local server required. All iCloud email addresses
+(aliases and custom domains) on your Apple ID are accessible through a single
+connection.
 
-Follows the same architecture as `alpaca-mcp`, `icloud-calendar-mcp`, and
-`garmin-connect-mcp`: Python + FastMCP, Docker on Render free tier, GitHub
-OAuth (single-user), Upstash Redis for token persistence across cold starts.
+## What it does
 
----
-
-## Tools
+Exposes 5 mail tools via MCP so Claude can interact with your iCloud Mail directly:
 
 | Tool | Description |
 |---|---|
@@ -20,124 +17,95 @@ OAuth (single-user), Upstash Redis for token persistence across cold starts.
 | `label_email` | Move a message to a folder |
 | `mark_read` | Mark a message as read |
 
----
-
-## Prerequisites
-
-- **iCloud App-Specific Password** — generate at [appleid.apple.com](https://appleid.apple.com) → Sign-In & Security → App-Specific Passwords. Never use your main Apple ID password.
-- **GitHub OAuth App** — create at github.com/settings/developers. Set the callback URL to `https://<render-url>/auth/callback`.
-- **Upstash Redis** — the same database used by the other MCPs works fine (share `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN`).
-
----
-
-## Deploy to Render
-
-### 1. Create the GitHub repository
-
-Push this directory to a new repo, e.g. `benediktwen/icloud-mail-mcp`.
-
-```bash
-git init
-git add .
-git commit -m "init: icloud-mail-mcp"
-git remote add origin git@github.com:benediktwen/icloud-mail-mcp.git
-git push -u origin main
-```
-
-Default branch must be `main`.
-
-### 2. Create a Render Web Service
-
-1. New → Web Service → connect the `icloud-mail-mcp` repo
-2. Runtime: **Docker** (Render auto-detects the `Dockerfile`)
-3. Instance type: **Free**
-
-### 3. Set environment variables in Render dashboard
-
-| Variable | Value |
-|---|---|
-| `ICLOUD_EMAIL` | `benedikt@wendlinger.me` (or whichever iCloud address) |
-| `ICLOUD_APP_PASSWORD` | App-specific password from appleid.apple.com |
-| `GITHUB_CLIENT_ID` | GitHub OAuth App client ID |
-| `GITHUB_CLIENT_SECRET` | GitHub OAuth App client secret |
-| `SERVER_URL` | `https://<your-render-url>.onrender.com` |
-| `UPSTASH_REDIS_REST_URL` | Upstash REST URL |
-| `UPSTASH_REDIS_REST_TOKEN` | Upstash REST token |
-| `GITHUB_ALLOWED_USER` | `benediktwen` (already set in render.yaml) |
-
-> `TOKEN_STORE_KEY` defaults to `icloud-mail-mcp`. Override if sharing a Redis DB with other MCPs and you need a different namespace (the other MCPs use `alpaca-mcp`, `icloud-calendar-mcp`, etc.).
-
-### 4. Update GitHub OAuth App callback URL
-
-Set the Authorization callback URL to:
+## How it works
 
 ```
-https://<your-render-url>.onrender.com/auth/callback
+Claude → /authorize → GitHub login (+ 2FA) → /auth/callback
+       → username verified → MCP access token issued → MCP connection
 ```
 
-### 5. Verify
+Access is protected by **GitHub OAuth** — only the GitHub account set in
+`GITHUB_ALLOWED_USER` can authenticate. Every session requires a fresh GitHub
+login with 2FA. No shared secrets are stored in Claude's config.
 
-Once deployed, the MCP endpoint is:
+> **Cold start note:** If the hosting platform sleeps the container, the first
+> request after wake-up takes a few seconds. OAuth tokens are persisted to
+> a Redis-compatible store so Claude does **not** need to re-authenticate.
+> iCloud drops idle IMAP connections after ~30 minutes — the client handles
+> this automatically with a single reconnect attempt.
 
-```
-https://<your-render-url>.onrender.com/mcp
-```
+## Deploy your own
 
-Add it as a connector in Claude Code (or any MCP client). On first use you will be redirected to GitHub to authorise.
+You will need:
 
----
+- A container hosting platform (e.g. Render, Railway, Fly.io)
+- A Redis-compatible key-value store for token persistence (e.g. Upstash, Redis Cloud)
+- A GitHub OAuth App for authentication
+- An Apple ID with iCloud Mail and an app-specific password
 
-## Cold-start behaviour
+### Step 1 — Apple app-specific password
 
-Render free tier spins down after inactivity (15–60 s spin-up). Upstash Redis
-keeps the OAuth token alive across restarts so you only authorise once.
+iCloud requires an app-specific password — your main Apple ID password will not work.
 
-If a routine calls this MCP after a long idle period, start with a lightweight
-call (`list_labels`) to warm up the container before the main tool call.
+1. Go to [appleid.apple.com](https://appleid.apple.com) → **Sign-In and Security** → **App-Specific Passwords**
+2. Click **+** and label it (e.g. `icloud-mail-mcp`)
+3. Copy the generated password (format: `xxxx-xxxx-xxxx-xxxx`)
 
----
+### Step 2 — Redis store
 
-## Local development
+Create a Redis database on your preferred provider. Note the **REST URL** and **auth token**.
 
-```bash
-export ICLOUD_EMAIL=benedikt@wendlinger.me
-export ICLOUD_APP_PASSWORD=xxxx-xxxx-xxxx-xxxx
-export GITHUB_CLIENT_ID=...
-export GITHUB_CLIENT_SECRET=...
-export SERVER_URL=http://localhost:8000
-export UPSTASH_REDIS_REST_URL=...
-export UPSTASH_REDIS_REST_TOKEN=...
+### Step 3 — GitHub OAuth App (one-time)
 
-pip install -e .
-python -m icloud_mail_mcp
-```
+Create a GitHub OAuth App at **Settings → Developer settings → OAuth Apps**:
 
----
+- **Application name:** anything (e.g. `My MCP Servers`)
+- **Homepage URL:** `https://your-service-url`
+- **Callback URL:** `https://your-service-url/auth/callback`
+
+Note the **Client ID** and generate a **Client Secret**.
+
+### Step 4 — Deploy
+
+1. Fork this repo
+2. Deploy to your container hosting platform (a `render.yaml` is included for Render)
+3. Set the environment variables listed below
+4. Trigger a deploy
+
+### Step 5 — Configure Claude
+
+In Claude.ai web (connector dialog):
+- **URL:** `https://your-service-url/mcp`
+- OAuth fields: leave empty — the server advertises its own OAuth metadata
+
+Claude Desktop and mobile sync automatically from the web connector.
+
+## Configuration reference
+
+| Env var | Required | Rotates | Description |
+|---|---|---|---|
+| `ICLOUD_EMAIL` | ✅ | Never | Your iCloud email address (primary Apple ID email) |
+| `ICLOUD_APP_PASSWORD` | ✅ | On reset | Apple app-specific password |
+| `GITHUB_CLIENT_ID` | ✅ | Never | GitHub OAuth App client ID |
+| `GITHUB_CLIENT_SECRET` | ✅ | Never | GitHub OAuth App client secret |
+| `GITHUB_ALLOWED_USER` | ✅ | Never | GitHub username allowed to connect |
+| `SERVER_URL` | ✅ | Never | Public base URL of this service |
+| `UPSTASH_REDIS_REST_URL` | ✅ | Never | Redis REST endpoint |
+| `UPSTASH_REDIS_REST_TOKEN` | ✅ | Never | Redis auth token |
+| `TOKEN_STORE_KEY` | — | Never | Redis key namespace (default: `mcp:icloud-mail:token_store`) |
 
 ## IMAP details
 
 | Protocol | Host | Port | Security |
 |---|---|---|---|
-| IMAP | `imap.mail.me.com` | 993 | TLS (SSL) |
+| IMAP | `imap.mail.me.com` | 993 | TLS |
 | SMTP | `smtp.mail.me.com` | 587 | STARTTLS |
 
-iCloud drops idle IMAP connections after ~30 minutes. The client handles
-`imaplib.abort` automatically with a single reconnect attempt.
+## Architecture
 
----
-
-## Project structure
-
-```
-icloud-mail-mcp/
-├── src/
-│   └── icloud_mail_mcp/
-│       ├── __init__.py           # _build_app(), main()
-│       ├── __main__.py           # python -m icloud_mail_mcp
-│       ├── github_oauth_provider.py
-│       ├── imap_client.py
-│       └── mail_tools.py
-├── pyproject.toml
-├── Dockerfile
-└── render.yaml
-```
+- **Transport:** Streamable HTTP (MCP 1.x) via FastMCP + uvicorn
+- **Auth:** GitHub OAuth 2.0 — server acts as Authorization Server, GitHub as Identity Provider
+- **User restriction:** GitHub username verified against `GITHUB_ALLOWED_USER` on every login
+- **Token lifetime:** 30-day access + refresh tokens (persisted to Redis)
+- **Token persistence:** Redis-compatible store — tokens survive container restarts
+- **Mail API:** Apple IMAP at `imap.mail.me.com` using Apple ID + app-specific password
