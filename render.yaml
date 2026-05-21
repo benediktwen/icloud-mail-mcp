@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: icloud-mail-mcp
+    runtime: docker
+    envVars:
+      - key: GITHUB_ALLOWED_USER
+        value: benediktwen
+      - key: ICLOUD_EMAIL
+        sync: false
+      - key: ICLOUD_APP_PASSWORD
+        sync: false
+      - key: GITHUB_CLIENT_ID
+        sync: false
+      - key: GITHUB_CLIENT_SECRET
+        sync: false
+      - key: SERVER_URL
+        sync: false
+      - key: UPSTASH_REDIS_REST_URL
+        sync: false
+      - key: UPSTASH_REDIS_REST_TOKEN
+        sync: false
