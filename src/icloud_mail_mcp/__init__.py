@@ -1,56 +1,90 @@
 """iCloud Mail MCP server."""
 
+import logging
 import os
+import sys
 
+import anyio
 import uvicorn
-from mcp.server.auth.settings import AuthSettings, ClientRegistrationOptions
+from mcp.server.auth.settings import AuthSettings, ClientRegistrationOptions, RevocationOptions
 from mcp.server.fastmcp import FastMCP
+from pydantic import AnyHttpUrl
 from starlette.requests import Request
-from starlette.responses import RedirectResponse
+from starlette.responses import JSONResponse
 
-from .github_oauth_provider import SERVER_URL, GitHubOAuthProvider
+from .github_oauth_provider import GitHubOAuthProvider
 from .mail_tools import register_tools
 
-_PROVIDER = GitHubOAuthProvider()
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+SERVER_URL = os.getenv("SERVER_URL", "")
+
+_PROVIDER: GitHubOAuthProvider | None = None
 
 
 def _build_app() -> FastMCP:
-    mcp = FastMCP(
-        "icloud-mail-mcp",
-        auth_server_provider=_PROVIDER,
-        auth=AuthSettings(
-            issuer_url=SERVER_URL,
-            resource_server_url=SERVER_URL,
-            client_registration_options=ClientRegistrationOptions(
-                enabled=True,
-                valid_scopes=["mail"],
-                default_scopes=["mail"],
-            ),
-            required_scopes=["mail"],
+    global _PROVIDER
+
+    github_client_id     = os.getenv("GITHUB_CLIENT_ID", "")
+    github_client_secret = os.getenv("GITHUB_CLIENT_SECRET", "")
+
+    if not github_client_id or not github_client_secret:
+        logger.error("GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET must be set.")
+        sys.exit(1)
+
+    if not SERVER_URL:
+        logger.error("SERVER_URL must be set to the public base URL of this service.")
+        sys.exit(1)
+
+    _PROVIDER = GitHubOAuthProvider(
+        github_client_id=github_client_id,
+        github_client_secret=github_client_secret,
+        server_url=SERVER_URL,
+    )
+
+    auth_settings = AuthSettings(
+        issuer_url=AnyHttpUrl(SERVER_URL),
+        resource_server_url=AnyHttpUrl(SERVER_URL),
+        client_registration_options=ClientRegistrationOptions(
+            enabled=True,
+            valid_scopes=["mail"],
+            default_scopes=["mail"],
         ),
+        revocation_options=RevocationOptions(enabled=True),
+    )
+
+    mcp = FastMCP(
+        "iCloud Mail MCP",
+        auth_server_provider=_PROVIDER,
+        auth=auth_settings,
+        host="0.0.0.0",
+        port=int(os.getenv("PORT", "8000")),
     )
 
     @mcp.custom_route("/health", methods=["GET"])
-    async def health(_request: Request):
-        from starlette.responses import JSONResponse
+    async def health(_request: Request) -> JSONResponse:
         return JSONResponse({"status": "ok"})
 
-    # GitHub OAuth callback — browser lands here after approving on github.com
     @mcp.custom_route("/auth/callback", methods=["GET"])
-    async def github_callback(request: Request) -> RedirectResponse:
-        code = request.query_params.get("code", "")
-        state = request.query_params.get("state", "")
-        redirect_uri = await _PROVIDER.handle_github_callback(code=code, state=state)
-        return RedirectResponse(url=redirect_uri)
+    async def github_callback(request: Request):
+        return await _PROVIDER.handle_github_callback(request)
 
     register_tools(mcp)
     return mcp
 
 
-def main() -> None:
-    app = _build_app()
-    uvicorn.run(
-        app.streamable_http_app(),
+async def _serve(mcp: FastMCP) -> None:
+    config = uvicorn.Config(
+        mcp.streamable_http_app(),
         host="0.0.0.0",
         port=int(os.getenv("PORT", "8000")),
+        log_level="info",
     )
+    await uvicorn.Server(config).serve()
+
+
+def main() -> None:
+    mcp = _build_app()
+    logger.info("GitHub OAuth enabled — only '%s' can authenticate.", os.getenv("GITHUB_ALLOWED_USER", "(not configured)"))
+    anyio.run(_serve, mcp)
