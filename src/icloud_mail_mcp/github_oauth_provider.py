@@ -69,7 +69,6 @@ class GitHubOAuthProvider(OAuthAuthorizationServerProvider):
             "redirect_uri": str(params.redirect_uri) if params.redirect_uri else None,
             "scope": list(params.scopes or []),
             "code_challenge": params.code_challenge,
-            "code_challenge_method": params.code_challenge_method,
             "resource": str(params.resource) if params.resource else None,
             "mcp_state": params.state,
         }
@@ -100,7 +99,6 @@ class GitHubOAuthProvider(OAuthAuthorizationServerProvider):
             scopes=data.get("scope", []),
             expires_at=data["expires_at"],
             code_challenge=data.get("code_challenge"),
-            code_challenge_method=data.get("code_challenge_method"),
             resource=data.get("resource"),
         )
 
@@ -235,7 +233,6 @@ class GitHubOAuthProvider(OAuthAuthorizationServerProvider):
             "scope": pending.get("scope", []),
             "expires_at": int(time.time()) + CODE_TTL,
             "code_challenge": pending.get("code_challenge"),
-            "code_challenge_method": pending.get("code_challenge_method"),
             "resource": pending.get("resource"),
         }
         _redis().set(_key(f"code:{auth_code}"), json.dumps(code_data), ex=CODE_TTL)
