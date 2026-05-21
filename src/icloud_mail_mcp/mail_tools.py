@@ -53,7 +53,7 @@ def register_tools(mcp: FastMCP) -> None:
         return _client.list_folders()
 
     @mcp.tool()
-    def label_email(uid: str, destination_folder: str, source_folder: str = "INBOX") -> dict:
+    def move_email(uid: str, destination_folder: str, source_folder: str = "INBOX") -> dict:
         """Move an email to a different folder.
 
         Args:
@@ -61,15 +61,76 @@ def register_tools(mcp: FastMCP) -> None:
             destination_folder: Target folder name (from list_labels).
             source_folder: Current folder (default: INBOX).
         """
-        _client.move_to_folder(uid=uid, destination=destination_folder)
+        _client.move_to_folder(uid=uid, destination=destination_folder, source_folder=source_folder)
         return {"ok": True, "uid": uid, "moved_to": destination_folder}
 
     @mcp.tool()
-    def mark_read(uid: str) -> dict:
+    def delete_email(uid: str, folder: str = "INBOX") -> dict:
+        """Move an email to Trash (Deleted Messages).
+
+        Args:
+            uid: Message UID from search_emails.
+            folder: Current folder the message lives in (default: INBOX).
+        """
+        _client.delete_email(uid=uid, folder=folder)
+        return {"ok": True, "uid": uid}
+
+    @mcp.tool()
+    def mark_read(uid: str, folder: str = "INBOX") -> dict:
         """Mark a message as read.
 
         Args:
             uid: Message UID from search_emails.
+            folder: Folder the message lives in (default: INBOX).
         """
-        _client.mark_read(uid=uid)
+        _client.mark_read(uid=uid, folder=folder)
         return {"ok": True, "uid": uid}
+
+    @mcp.tool()
+    def mark_unread(uid: str, folder: str = "INBOX") -> dict:
+        """Mark a message as unread.
+
+        Args:
+            uid: Message UID from search_emails.
+            folder: Folder the message lives in (default: INBOX).
+        """
+        _client.mark_unread(uid=uid, folder=folder)
+        return {"ok": True, "uid": uid}
+
+    @mcp.tool()
+    def flag_email(uid: str, folder: str = "INBOX") -> dict:
+        """Flag (star) a message.
+
+        Args:
+            uid: Message UID from search_emails.
+            folder: Folder the message lives in (default: INBOX).
+        """
+        _client.flag_email(uid=uid, folder=folder)
+        return {"ok": True, "uid": uid}
+
+    @mcp.tool()
+    def unflag_email(uid: str, folder: str = "INBOX") -> dict:
+        """Remove the flag (star) from a message.
+
+        Args:
+            uid: Message UID from search_emails.
+            folder: Folder the message lives in (default: INBOX).
+        """
+        _client.unflag_email(uid=uid, folder=folder)
+        return {"ok": True, "uid": uid}
+
+    @mcp.tool()
+    def create_draft_reply(uid: str, reply_text: str, folder: str = "INBOX") -> dict:
+        """Create a draft reply to an existing email.
+
+        The draft is saved to the Drafts folder and will appear in Apple Mail
+        (and any IMAP client) exactly as if you pressed the Reply button —
+        correct To, Re: subject, In-Reply-To header, and quoted original body.
+        No email is sent; you review and send manually.
+
+        Args:
+            uid: UID of the message to reply to (from search_emails).
+            reply_text: Your reply text, placed above the quoted original.
+            folder: Folder the original message lives in (default: INBOX).
+        """
+        return _client.create_draft_reply(uid=uid, folder=folder, reply_text=reply_text)
