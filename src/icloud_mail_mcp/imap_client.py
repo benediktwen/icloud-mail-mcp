@@ -164,6 +164,30 @@ class IMAPClient:
     # Draft creation
     # ------------------------------------------------------------------
 
+    def create_draft(self, to: str, subject: str, body: str, cc: str = "") -> dict:
+        """Append a new draft email to the Drafts folder."""
+
+        def _run(conn):
+            my_address = os.environ["ICLOUD_USERNAME"]
+            draft = MIMEText(body, "plain", "utf-8")
+            draft["From"]       = my_address
+            draft["To"]         = to
+            draft["Subject"]    = subject
+            draft["Date"]       = formatdate(localtime=True)
+            draft["Message-ID"] = make_msgid()
+            if cc:
+                draft["Cc"] = cc
+            raw = draft.as_bytes()
+            conn.append(
+                f'"{DRAFTS_FOLDER}"',
+                "\\Draft",
+                imaplib.Time2Internaldate(time.time()),
+                raw,
+            )
+            return {"ok": True, "draft_to": to, "subject": subject}
+
+        return self._with_reconnect(_run)
+
     def create_draft_reply(self, uid: str, folder: str, reply_text: str) -> dict:
         """Fetch original message and append a reply draft to the Drafts folder."""
 
