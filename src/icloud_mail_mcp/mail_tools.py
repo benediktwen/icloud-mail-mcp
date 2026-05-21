@@ -120,6 +120,26 @@ def register_tools(mcp: FastMCP) -> None:
         return {"ok": True, "uid": uid}
 
     @mcp.tool()
+    def create_draft(
+        to: str,
+        subject: str,
+        body: str,
+        cc: str = "",
+    ) -> dict:
+        """Create a new draft email in the Drafts folder.
+
+        The draft appears in Apple Mail (and any IMAP client) ready to send.
+        No email is sent; you review and send manually.
+
+        Args:
+            to: Recipient email address.
+            subject: Email subject line.
+            body: Plain-text email body.
+            cc: Optional CC address(es), comma-separated.
+        """
+        return _client.create_draft(to=to, subject=subject, body=body, cc=cc)
+
+    @mcp.tool()
     def create_draft_reply(uid: str, reply_text: str, folder: str = "INBOX") -> dict:
         """Create a draft reply to an existing email.
 
