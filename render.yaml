@@ -5,7 +5,7 @@ services:
     dockerfilePath: ./Dockerfile
     healthCheckPath: /health
     envVars:
-      - key: ICLOUD_EMAIL
+      - key: ICLOUD_USERNAME
         sync: false
       - key: ICLOUD_APP_PASSWORD
         sync: false
