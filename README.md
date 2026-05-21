@@ -84,7 +84,7 @@ Claude Desktop and mobile sync automatically from the web connector.
 
 | Env var | Required | Rotates | Description |
 |---|---|---|---|
-| `ICLOUD_EMAIL` | ✅ | Never | Your iCloud email address (primary Apple ID email) |
+| `ICLOUD_USERNAME` | ✅ | Never | Your iCloud email address (primary Apple ID email) |
 | `ICLOUD_APP_PASSWORD` | ✅ | On reset | Apple app-specific password |
 | `GITHUB_CLIENT_ID` | ✅ | Never | GitHub OAuth App client ID |
 | `GITHUB_CLIENT_SECRET` | ✅ | Never | GitHub OAuth App client secret |
