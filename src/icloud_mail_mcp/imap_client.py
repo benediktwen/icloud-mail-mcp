@@ -161,6 +161,34 @@ class IMAPClient:
         self._with_reconnect(_run)
 
     # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _fetch_message(self, conn, uid: str, folder: str) -> email.message.Message:
+        """Fetch a full message, falling back to HEADER+TEXT if RFC822 returns NIL.
+
+        iCloud occasionally returns a NIL RFC822 body for certain messages even
+        though they exist and their headers are accessible. Fetching BODY[HEADER]
+        and BODY[TEXT] separately always works in those cases.
+        """
+        typ, msg_data = conn.uid("FETCH", uid, "(RFC822)")
+        if typ == "OK" and msg_data and isinstance(msg_data[0], tuple) and isinstance(msg_data[0][1], bytes):
+            return email.message_from_bytes(msg_data[0][1])
+
+        # RFC822 returned NIL — fall back to fetching parts separately
+        typ_h, hdr_data = conn.uid("FETCH", uid, "(BODY.PEEK[HEADER])")
+        if typ_h != "OK" or not hdr_data or not isinstance(hdr_data[0], tuple):
+            raise ValueError(f"Message {uid!r} not found in {folder!r}")
+
+        hdr_raw = hdr_data[0][1] if isinstance(hdr_data[0][1], bytes) else b""
+        body_raw = b""
+        typ_t, txt_data = conn.uid("FETCH", uid, "(BODY.PEEK[TEXT])")
+        if typ_t == "OK" and txt_data and isinstance(txt_data[0], tuple) and isinstance(txt_data[0][1], bytes):
+            body_raw = txt_data[0][1]
+
+        return email.message_from_bytes(hdr_raw + b"\r\n" + body_raw)
+
+    # ------------------------------------------------------------------
     # Draft creation
     # ------------------------------------------------------------------
 
@@ -193,11 +221,7 @@ class IMAPClient:
 
         def _run(conn):
             self._select(conn, folder)
-            typ, msg_data = conn.uid("FETCH", uid, "(RFC822)")
-            if typ != "OK" or not msg_data or not isinstance(msg_data[0], tuple):
-                raise ValueError(f"Message {uid!r} not found in {folder!r}")
-
-            original = email.message_from_bytes(msg_data[0][1])
+            original = self._fetch_message(conn, uid, folder)
 
             orig_from    = _decode_header(original.get("From", ""))
             orig_subject = _decode_header(original.get("Subject", ""))
@@ -327,11 +351,7 @@ class IMAPClient:
 
         def _run(conn):
             self._select(conn, folder)
-            typ, msg_data = conn.uid("FETCH", uid, "(RFC822)")
-            if typ != "OK" or not msg_data or not isinstance(msg_data[0], tuple):
-                raise ValueError(f"Message {uid!r} not found in {folder!r}")
-            raw = msg_data[0][1]
-            msg = email.message_from_bytes(raw)
+            msg = self._fetch_message(conn, uid, folder)
             return {
                 "id": uid,
                 "subject": _decode_header(msg.get("Subject", "")),
