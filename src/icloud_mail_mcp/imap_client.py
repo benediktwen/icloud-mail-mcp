@@ -165,17 +165,19 @@ class IMAPClient:
     # ------------------------------------------------------------------
 
     def _fetch_message(self, conn, uid: str, folder: str) -> email.message.Message:
-        """Fetch a full message, falling back to HEADER+TEXT if RFC822 returns NIL.
+        """Fetch a full message using a three-step fallback chain.
 
-        iCloud occasionally returns a NIL RFC822 body for certain messages even
-        though they exist and their headers are accessible. Fetching BODY[HEADER]
-        and BODY[TEXT] separately always works in those cases.
+        iCloud is more reliable with BODY.PEEK[] than RFC822 (other MCP
+        implementations confirm this). BODY.PEEK[] also avoids silently marking
+        messages as read, which RFC822 does. If both full-body fetches return NIL,
+        header + text parts are fetched separately and stitched together.
         """
-        typ, msg_data = conn.uid("FETCH", uid, "(RFC822)")
-        if typ == "OK" and msg_data and isinstance(msg_data[0], tuple) and isinstance(msg_data[0][1], bytes):
-            return email.message_from_bytes(msg_data[0][1])
+        for fetch_spec in ("(BODY.PEEK[])", "(RFC822)"):
+            typ, msg_data = conn.uid("FETCH", uid, fetch_spec)
+            if typ == "OK" and msg_data and isinstance(msg_data[0], tuple) and isinstance(msg_data[0][1], bytes):
+                return email.message_from_bytes(msg_data[0][1])
 
-        # RFC822 returned NIL — fall back to fetching parts separately
+        # Both full-body fetches returned NIL — fetch parts separately
         typ_h, hdr_data = conn.uid("FETCH", uid, "(BODY.PEEK[HEADER])")
         if typ_h != "OK" or not hdr_data or not isinstance(hdr_data[0], tuple):
             raise ValueError(f"Message {uid!r} not found in {folder!r}")
