@@ -194,7 +194,7 @@ class IMAPClient:
         def _run(conn):
             self._select(conn, folder)
             typ, msg_data = conn.uid("FETCH", uid, "(RFC822)")
-            if typ != "OK" or not msg_data or not msg_data[0]:
+            if typ != "OK" or not msg_data or not isinstance(msg_data[0], tuple):
                 raise ValueError(f"Message {uid!r} not found in {folder!r}")
 
             original = email.message_from_bytes(msg_data[0][1])
@@ -328,7 +328,7 @@ class IMAPClient:
         def _run(conn):
             self._select(conn, folder)
             typ, msg_data = conn.uid("FETCH", uid, "(RFC822)")
-            if typ != "OK" or not msg_data or not msg_data[0]:
+            if typ != "OK" or not msg_data or not isinstance(msg_data[0], tuple):
                 raise ValueError(f"Message {uid!r} not found in {folder!r}")
             raw = msg_data[0][1]
             msg = email.message_from_bytes(raw)
