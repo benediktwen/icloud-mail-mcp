@@ -12,6 +12,7 @@ def register_tools(mcp: FastMCP) -> None:
     @mcp.tool()
     def search_emails(
         query: str = "",
+        from_address: str = "",
         folder: str = "INBOX",
         unread_only: bool = False,
         since: str = "",
@@ -22,6 +23,8 @@ def register_tools(mcp: FastMCP) -> None:
 
         Args:
             query: Free-text search string (searches headers and body).
+            from_address: Filter by exact sender address using IMAP FROM criterion
+                          (more reliable than query for sender searches).
             folder: IMAP folder to search (default: INBOX).
             unread_only: If true, return only unread messages.
             since: Earliest date in DD-Mon-YYYY format, e.g. "01-Jan-2025".
@@ -30,6 +33,7 @@ def register_tools(mcp: FastMCP) -> None:
         """
         return _client.search(
             query=query,
+            from_address=from_address,
             folder=folder,
             unread_only=unread_only,
             since=since or None,
@@ -154,3 +158,19 @@ def register_tools(mcp: FastMCP) -> None:
             folder: Folder the original message lives in (default: INBOX).
         """
         return _client.create_draft_reply(uid=uid, folder=folder, reply_text=reply_text)
+
+    @mcp.tool()
+    def read_pdf_attachment(uid: str, filename: str, folder: str = "INBOX", max_pages: int = 50) -> dict:
+        """Extract and return the plain text content of a PDF email attachment.
+
+        Use get_email first to see the list of attachments and their filenames.
+        Returns {page_count, pages_read, truncated, text}. Non-PDF attachments
+        are listed in get_email but cannot be read with this tool.
+
+        Args:
+            uid: Message UID from search_emails.
+            filename: Exact filename of the PDF attachment (from get_email attachments list).
+            folder: Folder the message lives in (default: INBOX).
+            max_pages: Maximum number of pages to extract (default 50).
+        """
+        return _client.get_pdf_text(uid=uid, filename=filename, folder=folder, max_pages=max_pages)
