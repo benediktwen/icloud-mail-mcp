@@ -283,6 +283,7 @@ class IMAPClient:
     def search(
         self,
         query: str = "",
+        from_address: str = "",
         folder: str = "INBOX",
         unread_only: bool = False,
         since: str | None = None,
@@ -301,6 +302,8 @@ class IMAPClient:
                 criteria.append(f'SINCE "{since}"')
             if before:
                 criteria.append(f'BEFORE "{before}"')
+            if from_address:
+                criteria.append(f'FROM "{from_address}"')
             if query:
                 criteria.append(f'TEXT "{query}"')
             if not criteria:
@@ -361,7 +364,24 @@ class IMAPClient:
                 "to": _decode_header(msg.get("To", "")),
                 "date": msg.get("Date", ""),
                 "body": _extract_body(msg),
+                "attachments": _list_attachments(msg),
             }
+
+        return self._with_reconnect(_run)
+
+    def get_pdf_text(self, uid: str, filename: str, folder: str = "INBOX", max_pages: int = 50) -> dict:
+        """Extract text from a named PDF attachment."""
+
+        def _run(conn):
+            self._select(conn, folder)
+            msg = self._fetch_message(conn, uid, folder)
+            for part in msg.walk():
+                if part.get_filename() == filename and "pdf" in (part.get_content_type() or "").lower():
+                    pdf_bytes = part.get_payload(decode=True)
+                    if not isinstance(pdf_bytes, bytes):
+                        raise ValueError(f"Could not read attachment {filename!r}")
+                    return _extract_pdf_text(pdf_bytes, max_pages)
+            raise ValueError(f"PDF attachment {filename!r} not found in message {uid!r}")
 
         return self._with_reconnect(_run)
 
@@ -417,3 +437,43 @@ def _extract_body(msg: email.message.Message) -> str:
     if html:
         return re.sub(r"<[^>]+>", "", html)
     return ""
+
+
+def _list_attachments(msg: email.message.Message) -> list[dict]:
+    """Return metadata for all MIME parts with Content-Disposition: attachment."""
+    attachments = []
+    for part in msg.walk():
+        if part.get_content_disposition() != "attachment":
+            continue
+        filename = part.get_filename() or "unknown"
+        payload = part.get_payload(decode=True)
+        attachments.append({
+            "filename": filename,
+            "content_type": part.get_content_type(),
+            "size_bytes": len(payload) if isinstance(payload, bytes) else 0,
+        })
+    return attachments
+
+
+def _extract_pdf_text(pdf_bytes: bytes, max_pages: int = 50) -> dict:
+    """Extract plain text from a PDF, up to max_pages pages."""
+    try:
+        import io
+        from pypdf import PdfReader
+    except ImportError:
+        return {"error": "pypdf not installed", "text": "", "page_count": 0}
+
+    reader = PdfReader(io.BytesIO(pdf_bytes))
+    total = len(reader.pages)
+    pages_to_read = min(total, max_pages)
+    texts = []
+    for i in range(pages_to_read):
+        text = reader.pages[i].extract_text() or ""
+        if text.strip():
+            texts.append(text)
+    return {
+        "page_count": total,
+        "pages_read": pages_to_read,
+        "truncated": total > max_pages,
+        "text": "\n\n".join(texts),
+    }
