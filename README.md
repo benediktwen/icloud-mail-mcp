@@ -31,8 +31,9 @@ Claude → /authorize → GitHub login (+ 2FA) → /auth/callback
 ```
 
 Access is protected by **GitHub OAuth** — only the GitHub account set in
-`GITHUB_ALLOWED_USER` can authenticate. Every session requires a fresh GitHub
-login with 2FA. No shared secrets are stored in Claude's config.
+`GITHUB_ALLOWED_USER` can authenticate. GitHub login with 2FA is required
+once every 30 days (tokens are persisted to Redis). No shared secrets are
+stored in Claude's config.
 
 > **Cold start note:** If the hosting platform sleeps the container, the first
 > request after wake-up takes a few seconds. OAuth tokens are persisted to
