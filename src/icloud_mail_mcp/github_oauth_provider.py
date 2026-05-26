@@ -40,7 +40,7 @@ GITHUB_AUTHORIZE_URL = "https://github.com/login/oauth/authorize"
 GITHUB_TOKEN_URL     = "https://github.com/login/oauth/access_token"
 GITHUB_USER_URL      = "https://api.github.com/user"
 
-ACCESS_TOKEN_TTL  = 3600 * 30         # 30 hours
+ACCESS_TOKEN_TTL  = 3600 * 24 * 30    # 30 days
 REFRESH_TOKEN_TTL = 3600 * 24 * 30   # 30 days
 AUTH_CODE_TTL     = 300               # 5 minutes
 

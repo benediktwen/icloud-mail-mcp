@@ -62,12 +62,13 @@ class IMAPClient:
         return self._conn
 
     def _with_reconnect(self, fn, *args, **kwargs):
+        _RETRIABLE = (imaplib.IMAP4.abort, imaplib.IMAP4.error, OSError, TimeoutError)
         for attempt in range(2):
             try:
                 conn = self._ensure_connected()
                 return fn(conn, *args, **kwargs)
-            except imaplib.IMAP4.abort:
-                print("IMAP connection aborted by server, reconnecting...")
+            except _RETRIABLE as exc:
+                print(f"IMAP connection error ({type(exc).__name__}), reconnecting...")
                 self._conn = None
                 self._selected_folder = None
                 if attempt == 1:
