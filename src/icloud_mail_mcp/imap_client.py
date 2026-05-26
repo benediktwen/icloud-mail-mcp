@@ -248,8 +248,13 @@ class IMAPClient:
             # Assemble body
             body = f"{reply_text}\n\n{attribution}\n\n{quoted}"
 
-            # Build the draft message
-            my_address = os.environ["ICLOUD_USERNAME"]
+            # Derive from address from the original message's To/Delivered-To header
+            # so replies go out from the address the mail was actually received on.
+            fallback = os.environ["ICLOUD_USERNAME"]
+            _, to_addr = parseaddr(_decode_header(original.get("Delivered-To", "")))
+            if not to_addr:
+                _, to_addr = parseaddr(_decode_header(original.get("To", "")))
+            my_address = to_addr if to_addr else fallback
             draft = MIMEText(body, "plain", "utf-8")
             draft["From"]    = my_address
             draft["To"]      = orig_from
