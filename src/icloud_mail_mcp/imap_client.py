@@ -4,12 +4,16 @@ iCloud drops idle IMAP connections after ~30 minutes. All operations go through
 _with_reconnect(), which catches imaplib.abort and re-establishes the connection.
 """
 
+import base64
 import email
 import imaplib
 import os
 import re
 import time
+from email import encoders
 from email.header import decode_header, make_header
+from email.mime.base import MIMEBase
+from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.utils import formatdate, make_msgid, parseaddr, parsedate_to_datetime
 
@@ -195,31 +199,43 @@ class IMAPClient:
     # Draft creation
     # ------------------------------------------------------------------
 
-    def create_draft(self, to: str, subject: str, body: str, cc: str = "") -> dict:
+    def create_draft(
+        self,
+        to: str,
+        subject: str,
+        body: str,
+        cc: str = "",
+        attachments: list[dict] | None = None,
+    ) -> dict:
         """Append a new draft email to the Drafts folder."""
 
         def _run(conn):
             my_address = os.environ["ICLOUD_USERNAME"]
-            draft = MIMEText(body, "plain", "utf-8")
-            draft["From"]       = my_address
-            draft["To"]         = to
-            draft["Subject"]    = subject
-            draft["Date"]       = formatdate(localtime=True)
-            draft["Message-ID"] = make_msgid()
+            if attachments:
+                msg: email.message.Message = MIMEMultipart()
+                msg.attach(MIMEText(body, "plain", "utf-8"))
+                for att in attachments:
+                    _attach_part(msg, att)
+            else:
+                msg = MIMEText(body, "plain", "utf-8")
+            msg["From"]       = my_address
+            msg["To"]         = to
+            msg["Subject"]    = subject
+            msg["Date"]       = formatdate(localtime=True)
+            msg["Message-ID"] = make_msgid()
             if cc:
-                draft["Cc"] = cc
-            raw = draft.as_bytes()
+                msg["Cc"] = cc
             conn.append(
                 f'"{DRAFTS_FOLDER}"',
                 "\\Draft",
                 imaplib.Time2Internaldate(time.time()),
-                raw,
+                msg.as_bytes(),
             )
-            return {"ok": True, "draft_to": to, "subject": subject}
+            return {"ok": True, "draft_to": to, "subject": subject, "attachment_count": len(attachments) if attachments else 0}
 
         return self._with_reconnect(_run)
 
-    def create_draft_reply(self, uid: str, folder: str, reply_text: str) -> dict:
+    def create_draft_reply(self, uid: str, folder: str, reply_text: str, attachments: list[dict] | None = None) -> dict:
         """Fetch original message and append a reply draft to the Drafts folder."""
 
         def _run(conn):
@@ -256,7 +272,13 @@ class IMAPClient:
             if not to_addr:
                 _, to_addr = parseaddr(_decode_header(original.get("To", "")))
             my_address = to_addr if to_addr else fallback
-            draft = MIMEText(body, "plain", "utf-8")
+            if attachments:
+                draft: email.message.Message = MIMEMultipart()
+                draft.attach(MIMEText(body, "plain", "utf-8"))
+                for att in attachments:
+                    _attach_part(draft, att)
+            else:
+                draft = MIMEText(body, "plain", "utf-8")
             draft["From"]    = my_address
             draft["To"]      = orig_from
             draft["Subject"] = subject
@@ -266,18 +288,18 @@ class IMAPClient:
                 draft["In-Reply-To"] = orig_msg_id
                 draft["References"]  = orig_msg_id
 
-            raw = draft.as_bytes()
             conn.append(
                 f'"{DRAFTS_FOLDER}"',
                 "\\Draft",
                 imaplib.Time2Internaldate(time.time()),
-                raw,
+                draft.as_bytes(),
             )
 
             return {
                 "ok": True,
                 "draft_to": orig_from,
                 "subject": subject,
+                "attachment_count": len(attachments) if attachments else 0,
             }
 
         return self._with_reconnect(_run)
@@ -459,6 +481,19 @@ def _list_attachments(msg: email.message.Message) -> list[dict]:
             "size_bytes": len(payload) if isinstance(payload, bytes) else 0,
         })
     return attachments
+
+
+def _attach_part(msg: email.message.Message, att: dict) -> None:
+    """Decode a base64 attachment dict and attach it to a MIMEMultipart message."""
+    filename = att["filename"]
+    content_type = att.get("content_type", "application/octet-stream")
+    data = base64.b64decode(att["data_base64"])
+    maintype, subtype = content_type.split("/", 1) if "/" in content_type else ("application", "octet-stream")
+    part = MIMEBase(maintype, subtype)
+    part.set_payload(data)
+    encoders.encode_base64(part)
+    part.add_header("Content-Disposition", "attachment", filename=filename)
+    msg.attach(part)
 
 
 def _extract_pdf_text(pdf_bytes: bytes, max_pages: int = 50) -> dict:
