@@ -20,8 +20,8 @@ Exposes 11 mail tools via MCP so Claude can interact with your iCloud Mail direc
 | `mark_unread` | Mark a message as unread |
 | `flag_email` | Flag (star) a message |
 | `unflag_email` | Remove the flag from a message |
-| `create_draft` | Create a new draft email in the Drafts folder |
-| `create_draft_reply` | Create a pre-filled reply draft for an existing message |
+| `create_draft` | Create a new draft email in the Drafts folder (supports file attachments) |
+| `create_draft_reply` | Create a pre-filled reply draft for an existing message (supports file attachments) |
 
 ## How it works
 
