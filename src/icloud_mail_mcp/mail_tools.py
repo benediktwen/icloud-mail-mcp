@@ -129,6 +129,7 @@ def register_tools(mcp: FastMCP) -> None:
         subject: str,
         body: str,
         cc: str = "",
+        attachments: list[dict] | None = None,
     ) -> dict:
         """Create a new draft email in the Drafts folder.
 
@@ -140,11 +141,22 @@ def register_tools(mcp: FastMCP) -> None:
             subject: Email subject line.
             body: Plain-text email body.
             cc: Optional CC address(es), comma-separated.
+            attachments: Optional list of file attachments. Each item must have:
+                - filename (str): Name shown in the email, e.g. "report.pdf".
+                - data_base64 (str): File contents encoded as base64.
+                - content_type (str, optional): MIME type, e.g. "application/pdf".
+                  Defaults to "application/octet-stream".
+                To attach a file: read it, base64-encode its bytes, pass here.
         """
-        return _client.create_draft(to=to, subject=subject, body=body, cc=cc)
+        return _client.create_draft(to=to, subject=subject, body=body, cc=cc, attachments=attachments)
 
     @mcp.tool()
-    def create_draft_reply(uid: str, reply_text: str, folder: str = "INBOX") -> dict:
+    def create_draft_reply(
+        uid: str,
+        reply_text: str,
+        folder: str = "INBOX",
+        attachments: list[dict] | None = None,
+    ) -> dict:
         """Create a draft reply to an existing email.
 
         The draft is saved to the Drafts folder and will appear in Apple Mail
@@ -156,8 +168,13 @@ def register_tools(mcp: FastMCP) -> None:
             uid: UID of the message to reply to (from search_emails).
             reply_text: Your reply text, placed above the quoted original.
             folder: Folder the original message lives in (default: INBOX).
+            attachments: Optional list of file attachments. Each item must have:
+                - filename (str): Name shown in the email, e.g. "report.pdf".
+                - data_base64 (str): File contents encoded as base64.
+                - content_type (str, optional): MIME type, e.g. "application/pdf".
+                  Defaults to "application/octet-stream".
         """
-        return _client.create_draft_reply(uid=uid, folder=folder, reply_text=reply_text)
+        return _client.create_draft_reply(uid=uid, folder=folder, reply_text=reply_text, attachments=attachments)
 
     @mcp.tool()
     def read_pdf_attachment(uid: str, filename: str, folder: str = "INBOX", max_pages: int = 50) -> dict:
