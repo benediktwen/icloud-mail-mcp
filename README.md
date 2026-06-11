@@ -116,3 +116,7 @@ Claude Desktop and mobile sync automatically from the web connector.
 - **Token lifetime:** 30-day access + refresh tokens (persisted to Redis)
 - **Token persistence:** Redis-compatible store — tokens survive container restarts
 - **Mail API:** Apple IMAP at `imap.mail.me.com` using Apple ID + app-specific password
+
+## Credits
+
+Built with [Claude Code](https://claude.ai/code).
