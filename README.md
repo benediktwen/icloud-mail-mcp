@@ -1,13 +1,10 @@
 # iCloud Mail MCP
 
-Remote MCP server for Apple iCloud Mail via IMAP. Connects Claude to your iCloud
-mailbox over the internet — no local server required. All iCloud email addresses
-(aliases and custom domains) on your Apple ID are accessible through a single
-connection.
+Remote MCP server for Apple iCloud Mail via IMAP. Gives AI assistants access to your iCloud mailbox over the internet — no local server or app required. All email addresses on your Apple ID — aliases and custom domains — are accessible through a single connection.
 
 ## What it does
 
-Exposes 11 mail tools via MCP so Claude can interact with your iCloud Mail directly:
+Exposes 11 mail tools so AI assistants can interact with your iCloud Mail directly:
 
 | Tool | Description |
 |---|---|
@@ -26,18 +23,23 @@ Exposes 11 mail tools via MCP so Claude can interact with your iCloud Mail direc
 ## How it works
 
 ```
-Claude → /authorize → GitHub login (+ 2FA) → /auth/callback
-       → username verified → MCP access token issued → MCP connection
+AI assistant → /authorize → GitHub login (+ 2FA) → /auth/callback
+             → username verified → MCP access token issued → MCP connection
 ```
 
 Access is protected by **GitHub OAuth** — only the GitHub account set in
 `GITHUB_ALLOWED_USER` can authenticate. GitHub login with 2FA is required
-once every 30 days (tokens are persisted to Redis). No shared secrets are
-stored in Claude's config.
+once every 30 days; tokens are persisted to Redis. No credentials are stored
+in the AI assistant's configuration.
+
+1. The AI assistant detects the MCP server requires OAuth
+2. A browser window opens — you log in to GitHub with 2FA
+3. The server verifies your GitHub username matches `GITHUB_ALLOWED_USER`
+4. The AI assistant receives a 30-day access token and a 30-day refresh token
 
 > **Cold start note:** If the hosting platform sleeps the container, the first
 > request after wake-up takes a few seconds. OAuth tokens are persisted to
-> a Redis-compatible store so Claude does **not** need to re-authenticate.
+> a Redis-compatible store so the AI assistant does **not** need to re-authenticate.
 > iCloud drops idle IMAP connections after ~30 minutes — the client handles
 > this automatically with a single reconnect attempt.
 
@@ -79,19 +81,20 @@ Note the **Client ID** and generate a **Client Secret**.
 3. Set the environment variables listed below
 4. Trigger a deploy
 
-### Step 5 — Configure Claude
+### Step 5 — Connect to your AI assistant
 
-In Claude.ai web (connector dialog):
+In your MCP-compatible AI assistant, add this server as a remote MCP connection:
+
 - **URL:** `https://your-service-url/mcp`
-- OAuth fields: leave empty — the server advertises its own OAuth metadata
+- Authentication: leave empty — the server handles OAuth automatically
 
-Claude Desktop and mobile sync automatically from the web connector.
+**For Claude:** paste the URL into the connector dialog at [claude.ai](https://claude.ai). Claude Desktop and mobile sync automatically from the web connector.
 
 ## Configuration reference
 
 | Env var | Required | Rotates | Description |
 |---|---|---|---|
-| `ICLOUD_USERNAME` | ✅ | Never | Your iCloud email address (primary Apple ID email) |
+| `ICLOUD_USERNAME` | ✅ | Never | Apple ID email |
 | `ICLOUD_APP_PASSWORD` | ✅ | On reset | Apple app-specific password |
 | `GITHUB_CLIENT_ID` | ✅ | Never | GitHub OAuth App client ID |
 | `GITHUB_CLIENT_SECRET` | ✅ | Never | GitHub OAuth App client secret |
@@ -113,7 +116,7 @@ Claude Desktop and mobile sync automatically from the web connector.
 - **Transport:** Streamable HTTP (MCP 1.x) via FastMCP + uvicorn
 - **Auth:** GitHub OAuth 2.0 — server acts as Authorization Server, GitHub as Identity Provider
 - **User restriction:** GitHub username verified against `GITHUB_ALLOWED_USER` on every login
-- **Token lifetime:** 30-day access + refresh tokens (persisted to Redis)
+- **Token lifetime:** 30-day access token, 30-day refresh token (rotated on each refresh)
 - **Token persistence:** Redis-compatible store — tokens survive container restarts
 - **Mail API:** Apple IMAP at `imap.mail.me.com` using Apple ID + app-specific password
 
