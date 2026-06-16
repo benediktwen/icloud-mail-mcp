@@ -14,6 +14,7 @@ _auth_codes are kept in-memory (short-lived, tied to an active browser session).
 Falls back to in-memory storage if Redis env vars are not set (tokens lost on restart).
 """
 
+import html
 import json
 import logging
 import os
@@ -42,6 +43,7 @@ GITHUB_USER_URL      = "https://api.github.com/user"
 
 ACCESS_TOKEN_TTL  = 3600 * 24 * 30    # 30 days
 REFRESH_TOKEN_TTL = 3600 * 24 * 30   # 30 days
+MAX_CLIENTS       = 100               # cap dynamically-registered clients (open DCR ⇒ bound the store)
 AUTH_CODE_TTL     = 300               # 5 minutes
 
 
@@ -96,6 +98,7 @@ class GitHubOAuthProvider(OAuthAuthorizationServerProvider):
         self._github_client_secret = github_client_secret
         self._callback_url         = server_url.rstrip("/") + "/auth/callback"
         self._allowed_user         = os.getenv("GITHUB_ALLOWED_USER", "").lower()
+        self._allowed_user_id      = os.getenv("GITHUB_ALLOWED_USER_ID", "").strip()
         self._redis_key            = os.getenv("TOKEN_STORE_KEY", "mcp:icloud-mail:token_store")
 
         redis_url   = os.getenv("UPSTASH_REDIS_REST_URL")
@@ -169,6 +172,12 @@ class GitHubOAuthProvider(OAuthAuthorizationServerProvider):
     async def register_client(self, client_info: OAuthClientInformationFull) -> None:
         logger.info("Registering OAuth client: %s", client_info.client_id)
         self._clients[client_info.client_id] = client_info
+        # Open dynamic registration ⇒ bound the persisted store (FIFO eviction).
+        while len(self._clients) > MAX_CLIENTS:
+            oldest = next(iter(self._clients))
+            if oldest == client_info.client_id:
+                break
+            self._clients.pop(oldest, None)
         self._save_store()
 
     async def authorize(self, client: OAuthClientInformationFull, params: AuthorizationParams) -> str:
@@ -199,7 +208,7 @@ class GitHubOAuthProvider(OAuthAuthorizationServerProvider):
 
         if error:
             logger.warning("GitHub OAuth error: %s", error)
-            return HTMLResponse(f"<h1>Authorization failed</h1><p>GitHub error: {error}</p>", status_code=400)
+            return HTMLResponse(f"<h1>Authorization failed</h1><p>GitHub error: {html.escape(error)}</p>", status_code=400)
 
         if not code or not github_state:
             return HTMLResponse("<h1>Invalid callback</h1><p>Missing code or state.</p>", status_code=400)
@@ -247,12 +256,22 @@ class GitHubOAuthProvider(OAuthAuthorizationServerProvider):
             return HTMLResponse("<h1>GitHub error</h1><p>Could not fetch user info.</p>", status_code=502)
 
         github_username = user_data.get("login", "").lower()
-        logger.info("GitHub OAuth: user='%s' allowed='%s'", github_username, self._allowed_user)
+        github_user_id  = str(user_data.get("id", ""))
+        logger.info("GitHub OAuth: user='%s' id='%s' allowed_id='%s'", github_username, github_user_id, self._allowed_user_id)
 
-        if github_username != self._allowed_user:
-            logger.warning("Access denied for GitHub user: %s", github_username)
+        # Authorize on the immutable numeric GitHub id when configured (logins are
+        # renameable and re-registerable). Fall back to the legacy login allowlist
+        # only if no id is set. Deny if neither is configured (fail closed).
+        if self._allowed_user_id:
+            authorized = github_user_id == self._allowed_user_id
+        else:
+            authorized = bool(self._allowed_user) and github_username == self._allowed_user
+
+        if not authorized:
+            logger.warning("Access denied for GitHub user: %s (id=%s)", github_username, github_user_id)
+            safe_login = html.escape(user_data.get("login") or "")
             return HTMLResponse(
-                f"<h1>Access Denied</h1><p>GitHub account <b>{user_data.get('login')}</b> is not authorized.</p>",
+                f"<h1>Access Denied</h1><p>GitHub account <b>{safe_login}</b> is not authorized.</p>",
                 status_code=403,
             )
 
