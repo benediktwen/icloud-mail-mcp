@@ -11,7 +11,7 @@ dependencies = [
     "uvicorn>=0.30.0",
     "httpx>=0.27.0",
     "starlette>=1.0.1",
-    "pypdf==6.15.0",  # pinned to deployed version
+    "pypdf==6.19.0",  # pinned to deployed version
 ]
 
 [tool.hatch.build.targets.wheel]
