@@ -7,18 +7,22 @@ Flow:
   3. Claude → POST /token → exchange code for access token
   4. Claude uses Bearer access token on every MCP request
 
-Tokens are persisted to Redis (UPSTASH_REDIS_REST_URL + UPSTASH_REDIS_REST_TOKEN)
-so re-authentication is not required after container restarts. Only _pending and
-_auth_codes are kept in-memory (short-lived, tied to an active browser session).
-
-Falls back to in-memory storage if Redis env vars are not set (tokens lost on restart).
+Tokens and client registrations are persisted so re-authentication is not
+required after container restarts:
+  - TOKEN_STORE_FILE set → local JSON file (self-hosted, persistent volume)
+  - else UPSTASH_REDIS_REST_URL + UPSTASH_REDIS_REST_TOKEN → Upstash Redis
+  - else in-memory only (tokens lost on restart)
+Only _pending and _auth_codes are always in-memory (short-lived, tied to an
+active browser session).
 """
 
 import html
+import contextlib
 import json
 import logging
 import os
 import secrets
+import tempfile
 import time
 from urllib.parse import urlencode
 
@@ -82,6 +86,41 @@ class _UpstashRedis:
         self._cmd("SET", key, value)
 
 
+class _FileStore:
+    """Token store in a local JSON file, for self-hosted deployments with a
+    persistent volume. Same get/set interface as _UpstashRedis (one file per
+    service, so the key is ignored). Writes are atomic and owner-only (0600 file
+    in a 0700 directory) because the file holds live access tokens.
+    """
+
+    def __init__(self, path: str) -> None:
+        self._path = os.path.abspath(os.path.expanduser(path))
+
+    def get(self, key: str) -> str | None:
+        try:
+            with open(self._path, encoding="utf-8") as f:
+                return f.read() or None
+        except FileNotFoundError:
+            return None
+
+    def set(self, key: str, value: str) -> None:
+        directory = os.path.dirname(self._path)
+        os.makedirs(directory, mode=0o700, exist_ok=True)
+        with contextlib.suppress(OSError):
+            os.chmod(directory, 0o700)
+        fd, tmp = tempfile.mkstemp(dir=directory, prefix=".token_store.", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(value)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, self._path)
+        except BaseException:
+            with contextlib.suppress(OSError):
+                os.unlink(tmp)
+            raise
+
+
 class GitHubOAuthProvider(OAuthAuthorizationServerProvider):
     """
     MCP OAuth Authorization Server backed by GitHub as upstream identity provider.
@@ -89,8 +128,8 @@ class GitHubOAuthProvider(OAuthAuthorizationServerProvider):
     Only the GitHub account set in GITHUB_ALLOWED_USER can complete the OAuth
     flow and receive an MCP access token.
 
-    Tokens are persisted to Redis so they survive container restarts.
-    Falls back to in-memory if Redis is not configured.
+    Tokens and client registrations are persisted to TOKEN_STORE_FILE or Upstash
+    Redis so they survive container restarts (see module docstring).
     """
 
     def __init__(self, github_client_id: str, github_client_secret: str, server_url: str) -> None:
@@ -101,14 +140,18 @@ class GitHubOAuthProvider(OAuthAuthorizationServerProvider):
         self._allowed_user_id      = os.getenv("GITHUB_ALLOWED_USER_ID", "").strip()
         self._redis_key            = os.getenv("TOKEN_STORE_KEY", "mcp:icloud-mail:token_store")
 
+        store_file  = os.getenv("TOKEN_STORE_FILE")
         redis_url   = os.getenv("UPSTASH_REDIS_REST_URL")
         redis_token = os.getenv("UPSTASH_REDIS_REST_TOKEN")
-        if redis_url and redis_token:
-            self._redis = _UpstashRedis(redis_url, redis_token)
-            logger.info("✅ Redis token store configured (key: %s)", self._redis_key)
+        if store_file:
+            self._store = _FileStore(store_file)
+            logger.info("✅ File token store configured (%s)", store_file)
+        elif redis_url and redis_token:
+            self._store = _UpstashRedis(redis_url, redis_token)
+            logger.info("✅ Upstash Redis token store configured (key: %s)", self._redis_key)
         else:
-            self._redis = None
-            logger.warning("⚠️  No Redis configured — tokens stored in memory only (lost on restart)")
+            self._store = None
+            logger.warning("⚠️  No token store configured — tokens stored in memory only (lost on restart)")
 
         self._pending:    dict[str, dict]                      = {}
         self._auth_codes: dict[str, AuthorizationCode]        = {}
@@ -120,12 +163,12 @@ class GitHubOAuthProvider(OAuthAuthorizationServerProvider):
         self._load_store()
 
     def _load_store(self) -> None:
-        if not self._redis:
+        if not self._store:
             return
         try:
-            raw = self._redis.get(self._redis_key)
+            raw = self._store.get(self._redis_key)
             if not raw:
-                logger.info("No token store found in Redis — starting fresh.")
+                logger.info("No saved token store found — starting fresh.")
                 return
             data = json.loads(raw) if isinstance(raw, str) else raw
             self._clients = {
@@ -141,14 +184,14 @@ class GitHubOAuthProvider(OAuthAuthorizationServerProvider):
                 for k, v in data.get("refresh_tokens", {}).items()
             }
             logger.info(
-                "✅ Token store loaded from Redis (%d clients, %d access tokens, %d refresh tokens)",
+                "✅ Token store loaded (%d clients, %d access tokens, %d refresh tokens)",
                 len(self._clients), len(self._access_tokens), len(self._refresh_tokens),
             )
         except Exception as exc:
-            logger.warning("Could not load token store from Redis: %s — starting fresh.", exc)
+            logger.warning("Could not load token store: %s — starting fresh.", exc)
 
     def _save_store(self) -> None:
-        if not self._redis:
+        if not self._store:
             return
         try:
             now = time.time()
@@ -162,9 +205,9 @@ class GitHubOAuthProvider(OAuthAuthorizationServerProvider):
                 "refresh_tokens": {k: _model_to_dict(v) for k, v in valid_refresh.items()},
                 "saved_at":       now,
             }
-            self._redis.set(self._redis_key, json.dumps(data, default=str))
+            self._store.set(self._redis_key, json.dumps(data, default=str))
         except Exception as exc:
-            logger.error("Failed to save token store to Redis: %s", exc)
+            logger.error("Failed to save token store: %s", exc)
 
     async def get_client(self, client_id: str) -> OAuthClientInformationFull | None:
         return self._clients.get(client_id)
