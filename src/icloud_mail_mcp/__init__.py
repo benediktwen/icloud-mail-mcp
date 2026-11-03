@@ -49,11 +49,15 @@ def _build_app() -> FastMCP:
         github_client_id=github_client_id,
         github_client_secret=github_client_secret,
         server_url=SERVER_URL,
+        service_name="iCloud Mail MCP",
     )
 
     auth_settings = AuthSettings(
         issuer_url=AnyHttpUrl(SERVER_URL),
         resource_server_url=AnyHttpUrl(SERVER_URL),
+        # Tokens are opaque strings issued by this process for this server only;
+        # the provider checks their audience itself (see load_access_token).
+        validate_token_resource=False,
         client_registration_options=ClientRegistrationOptions(
             enabled=True,
             valid_scopes=["mail"],
@@ -78,6 +82,10 @@ def _build_app() -> FastMCP:
     @mcp.custom_route("/auth/callback", methods=["GET"])
     async def github_callback(request: Request):
         return await _PROVIDER.handle_github_callback(request)
+
+    @mcp.custom_route("/auth/consent", methods=["POST"])
+    async def oauth_consent(request: Request):
+        return await _PROVIDER.handle_consent(request)
 
     register_tools(mcp)
     return mcp
