@@ -9,6 +9,7 @@ import email
 import imaplib
 import os
 import re
+import ssl
 import time
 from email import encoders
 from email.header import decode_header, make_header
@@ -41,7 +42,9 @@ class IMAPClient:
     # ------------------------------------------------------------------
 
     def _connect(self) -> imaplib.IMAP4_SSL:
-        conn = imaplib.IMAP4_SSL(IMAP_HOST, IMAP_PORT)
+        # imaplib's default context does NOT verify the server certificate
+        # (ssl._create_stdlib_context); use a verifying one explicitly.
+        conn = imaplib.IMAP4_SSL(IMAP_HOST, IMAP_PORT, ssl_context=ssl.create_default_context())
         conn.login(
             os.environ["ICLOUD_USERNAME"],
             os.environ["ICLOUD_APP_PASSWORD"],
