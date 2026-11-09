@@ -11,11 +11,13 @@ import os
 import re
 import time
 from email import encoders
-from email.header import decode_header, make_header
 from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from email.utils import formatdate, make_msgid, parseaddr, parsedate_to_datetime
+from email.header import Header
+from email.utils import formatdate, make_msgid
+
+from . import reply_builder
 
 IMAP_HOST = "imap.mail.me.com"
 IMAP_PORT = 993
@@ -26,9 +28,7 @@ DRAFTS_FOLDER = "Drafts"
 
 
 def _decode_header(value: str | None) -> str:
-    if not value:
-        return ""
-    return str(make_header(decode_header(value)))
+    return reply_builder.decode_mime_header(value)
 
 
 class IMAPClient:
@@ -220,7 +220,7 @@ class IMAPClient:
                 msg = MIMEText(body, "plain", "utf-8")
             msg["From"]       = my_address
             msg["To"]         = to
-            msg["Subject"]    = subject
+            msg["Subject"]    = subject if subject.isascii() else Header(subject, "utf-8")
             msg["Date"]       = formatdate(localtime=True)
             msg["Message-ID"] = make_msgid()
             if cc:
@@ -235,74 +235,81 @@ class IMAPClient:
 
         return self._with_reconnect(_run)
 
-    def create_draft_reply(self, uid: str, folder: str, reply_text: str, attachments: list[dict] | None = None) -> dict:
-        """Fetch original message and append a reply draft to the Drafts folder."""
+    def create_draft_reply(
+        self,
+        uid: str,
+        folder: str,
+        reply_text: str = "",
+        attachments: list[dict] | None = None,
+        reply_html: str = "",
+    ) -> dict:
+        """Fetch the original message and append an Apple-Mail-style reply draft.
+
+        The draft is multipart/alternative (text/plain + text/html) with the
+        original quoted in <blockquote type="cite">. Replying to an own mail
+        (e.g. from "Sent Messages") addresses the original recipients.
+        """
+        if not reply_text and not reply_html:
+            raise ValueError("reply_text or reply_html is required")
 
         def _run(conn):
             self._select(conn, folder)
             original = self._fetch_message(conn, uid, folder)
+            draft, summary = reply_builder.build_reply(
+                original,
+                reply_text=reply_text,
+                reply_html=reply_html,
+                own=reply_builder.own_addresses(),
+                original_is_own=self._is_sent_folder(conn, folder),
+            )
+            draft = reply_builder.wrap_with_attachments(
+                draft, [_attachment_part(att) for att in attachments or []]
+            )
 
-            orig_from    = _decode_header(original.get("From", ""))
-            orig_subject = _decode_header(original.get("Subject", ""))
-            orig_date    = original.get("Date", "")
-            orig_msg_id  = original.get("Message-ID", "")
-
-            # Format subject
-            subject = orig_subject if orig_subject.lower().startswith("re:") else f"Re: {orig_subject}"
-
-            # Format attribution line (Apple Mail style)
-            try:
-                dt = parsedate_to_datetime(orig_date)
-                formatted_date = dt.strftime("%-d %b %Y, at %H:%M")
-            except Exception:
-                formatted_date = orig_date
-            attribution = f"On {formatted_date}, {orig_from} wrote:"
-
-            # Quote original body
-            orig_body = _extract_body(original)
-            quoted = "\n".join(f"> {line}" for line in orig_body.splitlines())
-
-            # Assemble body
-            body = f"{reply_text}\n\n{attribution}\n\n{quoted}"
-
-            # Derive from address from the original message's To/Delivered-To header
-            # so replies go out from the address the mail was actually received on.
-            fallback = os.environ["ICLOUD_USERNAME"]
-            _, to_addr = parseaddr(_decode_header(original.get("Delivered-To", "")))
-            if not to_addr:
-                _, to_addr = parseaddr(_decode_header(original.get("To", "")))
-            my_address = to_addr if to_addr else fallback
-            if attachments:
-                draft: email.message.Message = MIMEMultipart()
-                draft.attach(MIMEText(body, "plain", "utf-8"))
-                for att in attachments:
-                    _attach_part(draft, att)
-            else:
-                draft = MIMEText(body, "plain", "utf-8")
-            draft["From"]    = my_address
-            draft["To"]      = orig_from
-            draft["Subject"] = subject
-            draft["Date"]    = formatdate(localtime=True)
-            draft["Message-ID"] = make_msgid()
-            if orig_msg_id:
-                draft["In-Reply-To"] = orig_msg_id
-                draft["References"]  = orig_msg_id
-
-            conn.append(
+            typ, data = conn.append(
                 f'"{DRAFTS_FOLDER}"',
                 "\\Draft",
                 imaplib.Time2Internaldate(time.time()),
                 draft.as_bytes(),
             )
+            if typ != "OK":
+                raise ValueError(f"Could not save draft: {data!r}")
 
+            draft_uid = _appended_uid(data) or self._find_by_message_id(
+                conn, DRAFTS_FOLDER, str(draft["Message-ID"])
+            )
             return {
                 "ok": True,
-                "draft_to": orig_from,
-                "subject": subject,
+                "uid": draft_uid,
+                "folder": DRAFTS_FOLDER,
+                **summary,
                 "attachment_count": len(attachments) if attachments else 0,
             }
 
         return self._with_reconnect(_run)
+
+    def _find_by_message_id(self, conn, folder: str, message_id: str) -> str:
+        """UID of the newest message with this Message-ID (iCloud has no UIDPLUS)."""
+        try:
+            self._select(conn, folder)
+            typ, data = conn.uid("SEARCH", None, "HEADER", "Message-ID", f'"{message_id}"')
+            if typ == "OK" and data and data[0]:
+                return data[0].split()[-1].decode()
+        except Exception:
+            pass
+        return ""
+
+    def _is_sent_folder(self, conn, folder: str) -> bool:
+        """True if the folder carries the \\Sent special-use flag (or is called so)."""
+        if folder.strip('"').lower() in ("sent messages", "sent", "gesendet", "sent items"):
+            return True
+        try:
+            typ, data = conn.list('""', f'"{folder}"')
+        except Exception:
+            return False
+        if typ != "OK":
+            return False
+        return any(b"\\Sent" in item for item in data if isinstance(item, bytes))
 
     # ------------------------------------------------------------------
     # Search / fetch
@@ -330,18 +337,27 @@ class IMAPClient:
                 criteria.append(f'SINCE "{since}"')
             if before:
                 criteria.append(f'BEFORE "{before}"')
-            if from_address:
-                criteria.append(f'FROM "{from_address}"')
-            if query:
-                criteria.append(f'TEXT "{query}"')
-            if not criteria:
-                criteria.append("ALL")
+            # Free-text values go as UTF-8 literals (CHARSET UTF-8), so umlauts,
+            # "ß" and quotes work. imaplib sends one literal per command, so each
+            # such criterion is its own SEARCH and the results are intersected.
+            literal_criteria = [(key, value) for key, value in (("FROM", from_address), ("TEXT", query)) if value]
 
-            search_str = " ".join(criteria)
-            typ, data = conn.uid("SEARCH", None, search_str)
-            if typ != "OK" or not data or not data[0]:
-                return []
+            if not literal_criteria:
+                typ, data = conn.uid("SEARCH", None, " ".join(criteria) or "ALL")
+                if typ != "OK" or not data or not data[0]:
+                    return []
+                found = data[0].split()
+            else:
+                found_sets = []
+                for key, value in literal_criteria:
+                    conn.literal = value.encode("utf-8")
+                    typ, data = conn.uid("SEARCH", "CHARSET", "UTF-8", *criteria, key)
+                    if typ != "OK" or not data or not data[0]:
+                        return []
+                    found_sets.append(set(data[0].split()))
+                found = sorted(set.intersection(*found_sets), key=int)
 
+            data = [b" ".join(found)]
             uids = data[0].split()
             uids = uids[-max_results:]
 
@@ -423,6 +439,16 @@ def _extract_uid(fetch_response_line: bytes) -> str:
     return m.group(1).decode() if m else ""
 
 
+def _appended_uid(append_response) -> str:
+    """UID of an APPENDed message from the APPENDUID response code, if any."""
+    for item in append_response or []:
+        if isinstance(item, bytes):
+            m = re.search(rb"APPENDUID \d+ (\d+)", item)
+            if m:
+                return m.group(1).decode()
+    return ""
+
+
 def _fetch_snippet(conn: imaplib.IMAP4_SSL, uid: str, length: int = 200) -> str:
     try:
         typ, data = conn.uid("FETCH", uid, f"(BODY.PEEK[TEXT]<0.{length}>)")
@@ -436,35 +462,8 @@ def _fetch_snippet(conn: imaplib.IMAP4_SSL, uid: str, length: int = 200) -> str:
 
 
 def _extract_body(msg: email.message.Message) -> str:
-    """Return plain text body, falling back to HTML stripped of tags."""
-    plain = ""
-    html = ""
-    if msg.is_multipart():
-        for part in msg.walk():
-            ct = part.get_content_type()
-            if ct == "text/plain" and not plain:
-                payload = part.get_payload(decode=True)
-                if isinstance(payload, bytes):
-                    plain = payload.decode(part.get_content_charset() or "utf-8", errors="replace")
-            elif ct == "text/html" and not html:
-                payload = part.get_payload(decode=True)
-                if isinstance(payload, bytes):
-                    html = payload.decode(part.get_content_charset() or "utf-8", errors="replace")
-    else:
-        payload = msg.get_payload(decode=True)
-        if isinstance(payload, bytes):
-            charset = msg.get_content_charset() or "utf-8"
-            text = payload.decode(charset, errors="replace")
-            if msg.get_content_type() == "text/html":
-                html = text
-            else:
-                plain = text
-
-    if plain:
-        return plain
-    if html:
-        return re.sub(r"<[^>]+>", "", html)
-    return ""
+    """Return plain text body, falling back to HTML converted to readable text."""
+    return reply_builder.body_text(msg)
 
 
 def _list_attachments(msg: email.message.Message) -> list[dict]:
@@ -485,6 +484,11 @@ def _list_attachments(msg: email.message.Message) -> list[dict]:
 
 def _attach_part(msg: email.message.Message, att: dict) -> None:
     """Decode a base64 attachment dict and attach it to a MIMEMultipart message."""
+    msg.attach(_attachment_part(att))
+
+
+def _attachment_part(att: dict) -> MIMEBase:
+    """MIME part for a base64 attachment dict {filename, data_base64, content_type}."""
     filename = att["filename"]
     content_type = att.get("content_type", "application/octet-stream")
     data = base64.b64decode(att["data_base64"])
@@ -493,7 +497,7 @@ def _attach_part(msg: email.message.Message, att: dict) -> None:
     part.set_payload(data)
     encoders.encode_base64(part)
     part.add_header("Content-Disposition", "attachment", filename=filename)
-    msg.attach(part)
+    return part
 
 
 def _extract_pdf_text(pdf_bytes: bytes, max_pages: int = 50) -> dict:

@@ -8,7 +8,7 @@ Exposes 11 mail tools so AI assistants can interact with your iCloud Mail direct
 
 | Tool | Description |
 |---|---|
-| `search_emails` | Search by query, date range, unread flag. Returns `{id, subject, from, date, snippet}` |
+| `search_emails` | Search by query, sender, date range, unread flag (UTF-8, so umlauts work). Returns `{id, subject, from, date, snippet}` |
 | `get_email` | Fetch full message body by UID |
 | `list_labels` | List all IMAP folders / labels |
 | `move_email` | Move a message to a different folder |
@@ -18,7 +18,7 @@ Exposes 11 mail tools so AI assistants can interact with your iCloud Mail direct
 | `flag_email` | Flag (star) a message |
 | `unflag_email` | Remove the flag from a message |
 | `create_draft` | Create a new draft email in the Drafts folder (supports file attachments) |
-| `create_draft_reply` | Create a pre-filled reply draft for an existing message (supports file attachments) |
+| `create_draft_reply` | Create a reply draft laid out like Apple Mail: HTML + plain text, original quoted with its formatting and inline images, one `Re:`, threading headers; replies to own mail go to the original recipients (supports file attachments and optional `reply_html`) |
 
 ## How it works
 
@@ -109,6 +109,7 @@ In your MCP-compatible AI assistant, add this server as a remote MCP connection:
 | `GITHUB_ALLOWED_USER_ID` | ✅ | Never | Immutable numeric GitHub user ID allowed to connect (preferred) |
 | `GITHUB_ALLOWED_USER` | — | Never | GitHub username — legacy fallback, used only if `GITHUB_ALLOWED_USER_ID` is unset |
 | `SERVER_URL` | ✅ | Never | Public base URL of this service |
+| `ICLOUD_OWN_ADDRESSES` | — | When aliases change | Comma-separated aliases / custom-domain addresses of the account. Used by `create_draft_reply` to recognise own mail and never address yourself (iCloud IMAP cannot list aliases) |
 | `TOKEN_STORE_FILE` | ✅* | Never | Path of the OAuth token store file (in a mounted volume); takes precedence over Redis |
 | `UPSTASH_REDIS_REST_URL` | ✅* | Never | Upstash Redis REST endpoint (alternative to `TOKEN_STORE_FILE`) |
 | `UPSTASH_REDIS_REST_TOKEN` | ✅* | Never | Upstash Redis REST token |

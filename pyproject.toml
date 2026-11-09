@@ -12,6 +12,7 @@ dependencies = [
     "httpx>=0.27.0",
     "starlette>=1.0.1",
     "pypdf==6.19.0",  # pinned to deployed version
+    "tzdata",  # zoneinfo data (Europe/Berlin) — python:slim ships none
 ]
 
 [tool.hatch.build.targets.wheel]

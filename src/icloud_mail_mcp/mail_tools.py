@@ -22,7 +22,8 @@ def register_tools(mcp: FastMCP) -> None:
         """Search emails. Returns [{id, subject, from, date, snippet}].
 
         Args:
-            query: Free-text search string (searches headers and body).
+            query: Free-text search string (searches headers and body);
+                   umlauts and other non-ASCII characters are fine.
             from_address: Filter by exact sender address using IMAP FROM criterion
                           (more reliable than query for sender searches).
             folder: IMAP folder to search (default: INBOX).
@@ -153,28 +154,46 @@ def register_tools(mcp: FastMCP) -> None:
     @mcp.tool()
     def create_draft_reply(
         uid: str,
-        reply_text: str,
+        reply_text: str = "",
         folder: str = "INBOX",
         attachments: list[dict] | None = None,
+        reply_html: str = "",
     ) -> dict:
-        """Create a draft reply to an existing email.
+        """Create a draft reply to an existing email, laid out like Apple Mail.
 
-        The draft is saved to the Drafts folder and will appear in Apple Mail
-        (and any IMAP client) exactly as if you pressed the Reply button —
-        correct To, Re: subject, In-Reply-To header, and quoted original body.
+        The draft is saved to the Drafts folder and looks in Apple Mail like a
+        reply made there: HTML + plain text, "On <date>, at <time>, <name>
+        <<address>> wrote:" and the original (with its formatting and inline
+        images) quoted below. Subject gets exactly one "Re:"; In-Reply-To and
+        References keep the thread. Replying to an own mail (e.g. folder
+        "Sent Messages") addresses its original To/Cc, never yourself.
         No email is sent; you review and send manually.
 
         Args:
             uid: UID of the message to reply to (from search_emails).
-            reply_text: Your reply text, placed above the quoted original.
+            reply_text: Your reply as plain text, placed above the quoted original.
+                Blank lines separate paragraphs.
             folder: Folder the original message lives in (default: INBOX).
             attachments: Optional list of file attachments. Each item must have:
                 - filename (str): Name shown in the email, e.g. "report.pdf".
                 - data_base64 (str): File contents encoded as base64.
                 - content_type (str, optional): MIME type, e.g. "application/pdf".
                   Defaults to "application/octet-stream".
+            reply_html: Optional HTML for your reply (e.g. with <ul> lists or
+                <b>). Replaces the HTML generated from reply_text; the plain-text
+                part still uses reply_text (or this HTML as text if reply_text
+                is empty).
+
+        Returns {ok, uid, folder, draft_to, draft_cc, draft_from, subject,
+        inline_images, attachment_count}; uid is the draft's UID in Drafts.
         """
-        return _client.create_draft_reply(uid=uid, folder=folder, reply_text=reply_text, attachments=attachments)
+        return _client.create_draft_reply(
+            uid=uid,
+            folder=folder,
+            reply_text=reply_text,
+            attachments=attachments,
+            reply_html=reply_html,
+        )
 
     @mcp.tool()
     def read_pdf_attachment(uid: str, filename: str, folder: str = "INBOX", max_pages: int = 50) -> dict:
