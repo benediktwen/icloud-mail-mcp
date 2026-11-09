@@ -258,3 +258,95 @@ def test_search_without_text_keeps_plain_search():
     _client_with(conn).search(since="01-Nov-2026")
     args, literal = conn.calls[0]
     assert args == (None, 'SINCE "01-Nov-2026"') and literal is None
+
+
+# ----------------------------------------------------------------------
+# Quote colours and "latest message of the thread"
+# ----------------------------------------------------------------------
+
+def test_strip_black_text_keeps_other_colours():
+    markup = (
+        '<span style="font-size:11pt;color: rgb(0, 0, 0);font-family:Arial">a</span>'
+        '<span style="color:black !important">b</span><span style="COLOR:#000000">c</span>'
+        '<span style="color:windowtext;">d</span><font color="#000">e</font>'
+        '<span style="color: rgb(10, 26, 107); background-color: rgb(0, 0, 0)">f</span>'
+    )
+    out = rb.strip_black_text(markup)
+    assert "rgb(0, 0, 0);" not in out.split("background-color")[0]
+    assert "black" not in out and "#000" not in out and "windowtext" not in out
+    assert "font-size:11pt;font-family:Arial" in out
+    assert "color: rgb(10, 26, 107)" in out and "background-color: rgb(0, 0, 0)" in out
+
+
+def test_quoted_outlook_black_is_removed_in_draft():
+    original = _html_mail(with_image=False)
+    html_part = [p for p in original.walk() if p.get_content_type() == "text/html"][0]
+    html_part.set_payload(
+        '<html><body><p style="color:rgb(0,0,0)">Text</p><p style="color:#c04a2c">Marke</p></body></html>',
+        "utf-8",
+    )
+    draft, _ = rb.build_reply(original, reply_text="x", own=OWN)
+    _, _, html = _parts(draft)
+    assert "rgb(0,0,0)" not in html and "#c04a2c" in html
+
+
+def _header_msg(mid, date, refs="", irt=""):
+    lines = [f"Message-ID: {mid}", f"Date: {date}"]
+    if refs:
+        lines.append(f"References: {refs}")
+    if irt:
+        lines.append(f"In-Reply-To: {irt}")
+    return email.message_from_string("\r\n".join(lines) + "\r\n\r\nbody")
+
+
+class _ThreadConn:
+    """Fake IMAP with a thread spread over INBOX and Sent Messages."""
+
+    def __init__(self, mailbox):
+        self.mailbox = mailbox  # {folder: {uid: message}}
+        self.selected = None
+
+    def list(self, *args):
+        return "OK", [
+            b'(\\Noinferiors) "/" "INBOX"', b'(\\Sent) "/" "Sent Messages"',
+            b'() "/" "Drafts"', b'(\\Trash) "/" "Deleted Messages"', b'() "/" "Junk"',
+        ]
+
+    def select(self, folder):
+        self.selected = folder.strip('"')
+        return "OK", [b"1"]
+
+    def uid(self, command, *args):
+        box = self.mailbox.get(self.selected, {})
+        if command == "SEARCH":
+            _, _, header, value = args
+            value = value.strip('"')
+            hits = [u for u, m in box.items() if value in (m.get(header) or "")]
+            return "OK", [" ".join(hits).encode()]
+        if command == "FETCH":
+            out = []
+            for u in args[0].decode().split(","):
+                out.append((f"1 (UID {u} BODY[HEADER] {{1}}".encode(), box[u].as_bytes()))
+                out.append(b")")
+            return "OK", out
+        raise AssertionError(command)
+
+
+def test_latest_in_thread_follows_replies_across_folders():
+    root = _header_msg("<a@x>", "Thu, 5 Nov 2026 08:26:30 +0000")
+    mailbox = {
+        "INBOX": {"10": root},
+        "Sent Messages": {
+            "139": _header_msg("<b@x>", "Thu, 5 Nov 2026 12:38:31 +0100", refs="<a@x>", irt="<a@x>"),
+            "143": _header_msg("<c@x>", "Mon, 9 Nov 2026 12:57:01 +0100", refs="<a@x> <b@x>", irt="<b@x>"),
+        },
+        "Drafts": {"205": _header_msg("<d@x>", "Tue, 10 Nov 2026 09:00:00 +0100", refs="<a@x> <b@x> <c@x>")},
+    }
+    client = IMAPClient()
+    assert client._latest_in_thread(_ThreadConn(mailbox), root) == ("Sent Messages", "143")
+
+
+def test_latest_in_thread_none_when_message_is_newest():
+    last = _header_msg("<c@x>", "Mon, 9 Nov 2026 12:57:01 +0100", refs="<a@x> <b@x>")
+    mailbox = {"INBOX": {}, "Sent Messages": {"143": last}}
+    assert IMAPClient()._latest_in_thread(_ThreadConn(mailbox), last) is None

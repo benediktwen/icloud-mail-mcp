@@ -15,7 +15,7 @@ from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.header import Header
-from email.utils import formatdate, make_msgid
+from email.utils import formatdate, make_msgid, parsedate_to_datetime
 
 from . import reply_builder
 
@@ -242,12 +242,17 @@ class IMAPClient:
         reply_text: str = "",
         attachments: list[dict] | None = None,
         reply_html: str = "",
+        latest_in_thread: bool = True,
     ) -> dict:
         """Fetch the original message and append an Apple-Mail-style reply draft.
 
         The draft is multipart/alternative (text/plain + text/html) with the
         original quoted in <blockquote type="cite">. Replying to an own mail
         (e.g. from "Sent Messages") addresses the original recipients.
+
+        With latest_in_thread (default) the reply goes to the newest message of
+        the thread across all mail folders, like pressing Reply on the last
+        message in Apple Mail — also when that last message is an own mail.
         """
         if not reply_text and not reply_html:
             raise ValueError("reply_text or reply_html is required")
@@ -255,12 +260,19 @@ class IMAPClient:
         def _run(conn):
             self._select(conn, folder)
             original = self._fetch_message(conn, uid, folder)
+            reply_folder, reply_uid = folder, uid
+            if latest_in_thread:
+                latest = self._latest_in_thread(conn, original)
+                if latest:
+                    reply_folder, reply_uid = latest
+                    self._select(conn, reply_folder)
+                    original = self._fetch_message(conn, reply_uid, reply_folder)
             draft, summary = reply_builder.build_reply(
                 original,
                 reply_text=reply_text,
                 reply_html=reply_html,
                 own=reply_builder.own_addresses(),
-                original_is_own=self._is_sent_folder(conn, folder),
+                original_is_own=self._is_sent_folder(conn, reply_folder),
             )
             draft = reply_builder.wrap_with_attachments(
                 draft, [_attachment_part(att) for att in attachments or []]
@@ -283,10 +295,80 @@ class IMAPClient:
                 "uid": draft_uid,
                 "folder": DRAFTS_FOLDER,
                 **summary,
+                "replied_to": {
+                    "folder": reply_folder,
+                    "uid": reply_uid,
+                    "from": _decode_header(original.get("From", "")),
+                    "date": original.get("Date", ""),
+                },
+                "switched_to_latest": (reply_folder, reply_uid) != (folder, uid),
                 "attachment_count": len(attachments) if attachments else 0,
             }
 
         return self._with_reconnect(_run)
+
+    def _thread_folders(self, conn) -> list[str]:
+        """Mail folders a thread can live in (no Drafts, Trash, Junk)."""
+        skip = {DRAFTS_FOLDER.lower(), TRASH_FOLDER.lower(), "junk", "notes"}
+        typ, data = conn.list()
+        folders = []
+        for item in data or []:
+            if not isinstance(item, bytes):
+                continue
+            if any(flag in item for flag in (b"\\Trash", b"\\Junk", b"\\Drafts", b"\\Noselect")):
+                continue
+            m = re.search(rb'"([^"]+)"$', item)
+            name = m.group(1).decode("utf-8", "replace") if m else ""
+            if name and name.lower() not in skip:
+                folders.append(name)
+        return folders
+
+    def _latest_in_thread(self, conn, original: email.message.Message, max_hops: int = 20) -> tuple[str, str] | None:
+        """(folder, uid) of the newest reply in the thread below ``original``, or None.
+
+        Follows References / In-Reply-To downwards across all mail folders:
+        each later message of a thread names the earlier ones there.
+        """
+        current_id = " ".join((original.get("Message-ID") or "").split())
+        if not current_id:
+            return None
+        folders = self._thread_folders(conn)
+        best: tuple[str, str] | None = None
+        seen = {current_id}
+        for _ in range(max_hops):
+            newest = None
+            for folder in folders:
+                try:
+                    self._select(conn, folder)
+                except ValueError:
+                    continue
+                uids: set[bytes] = set()
+                for header in ("References", "In-Reply-To"):
+                    typ, data = conn.uid("SEARCH", None, "HEADER", header, f'"{current_id}"')
+                    if typ == "OK" and data and data[0]:
+                        uids.update(data[0].split())
+                if not uids:
+                    continue
+                typ, msg_data = conn.uid(
+                    "FETCH", b",".join(sorted(uids, key=int)),
+                    "(BODY.PEEK[HEADER.FIELDS (MESSAGE-ID DATE)])",
+                )
+                for part in msg_data or []:
+                    if not isinstance(part, tuple):
+                        continue
+                    hdr = email.message_from_bytes(part[1])
+                    mid = " ".join((hdr.get("Message-ID") or "").split())
+                    if not mid or mid in seen:
+                        continue
+                    date = _parse_date(hdr.get("Date"))
+                    if newest is None or date > newest[0]:
+                        newest = (date, mid, folder, _extract_uid(part[0]))
+            if newest is None:
+                break
+            _, current_id, folder_found, uid_found = newest
+            seen.add(current_id)
+            best = (folder_found, uid_found)
+        return best
 
     def _find_by_message_id(self, conn, folder: str, message_id: str) -> str:
         """UID of the newest message with this Message-ID (iCloud has no UIDPLUS)."""
@@ -437,6 +519,14 @@ class IMAPClient:
 def _extract_uid(fetch_response_line: bytes) -> str:
     m = re.search(rb"UID (\d+)", fetch_response_line)
     return m.group(1).decode() if m else ""
+
+
+def _parse_date(value: str | None) -> float:
+    """POSIX timestamp of a Date header; 0 if missing or unreadable."""
+    try:
+        return parsedate_to_datetime(value).timestamp() if value else 0.0
+    except Exception:
+        return 0.0
 
 
 def _appended_uid(append_response) -> str:

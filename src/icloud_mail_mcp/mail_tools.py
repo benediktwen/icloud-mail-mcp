@@ -158,6 +158,7 @@ def register_tools(mcp: FastMCP) -> None:
         folder: str = "INBOX",
         attachments: list[dict] | None = None,
         reply_html: str = "",
+        latest_in_thread: bool = True,
     ) -> dict:
         """Create a draft reply to an existing email, laid out like Apple Mail.
 
@@ -169,8 +170,15 @@ def register_tools(mcp: FastMCP) -> None:
         "Sent Messages") addresses its original To/Cc, never yourself.
         No email is sent; you review and send manually.
 
+        By default the reply goes to the NEWEST message of the thread (searched
+        across all mail folders, "Sent Messages" included), whichever message
+        uid points to — like pressing Reply on the last message in Apple Mail.
+        If that last message is your own, the draft goes to its recipients.
+        The result says which message was answered (replied_to,
+        switched_to_latest).
+
         Args:
-            uid: UID of the message to reply to (from search_emails).
+            uid: UID of a message of the thread (from search_emails).
             reply_text: Your reply as plain text, placed above the quoted original.
                 Blank lines separate paragraphs.
             folder: Folder the original message lives in (default: INBOX).
@@ -183,9 +191,12 @@ def register_tools(mcp: FastMCP) -> None:
                 <b>). Replaces the HTML generated from reply_text; the plain-text
                 part still uses reply_text (or this HTML as text if reply_text
                 is empty).
+            latest_in_thread: Default true. Set false to answer exactly the
+                message given by uid/folder, even if newer ones exist.
 
         Returns {ok, uid, folder, draft_to, draft_cc, draft_from, subject,
-        inline_images, attachment_count}; uid is the draft's UID in Drafts.
+        inline_images, replied_to, switched_to_latest, attachment_count};
+        uid is the draft's UID in Drafts.
         """
         return _client.create_draft_reply(
             uid=uid,
@@ -193,6 +204,7 @@ def register_tools(mcp: FastMCP) -> None:
             reply_text=reply_text,
             attachments=attachments,
             reply_html=reply_html,
+            latest_in_thread=latest_in_thread,
         )
 
     @mcp.tool()

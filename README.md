@@ -18,7 +18,7 @@ Exposes 11 mail tools so AI assistants can interact with your iCloud Mail direct
 | `flag_email` | Flag (star) a message |
 | `unflag_email` | Remove the flag from a message |
 | `create_draft` | Create a new draft email in the Drafts folder (supports file attachments) |
-| `create_draft_reply` | Create a reply draft laid out like Apple Mail: HTML + plain text, original quoted with its formatting and inline images, one `Re:`, threading headers; replies to own mail go to the original recipients (supports file attachments and optional `reply_html`) |
+| `create_draft_reply` | Create a reply draft laid out like Apple Mail: HTML + plain text, original quoted with its formatting and inline images, one `Re:`, threading headers; answers the newest message of the thread across all folders (`latest_in_thread`, default on), and if that is your own mail it goes to its recipients; black text forced by Outlook is dropped from the quote so it shows in Apple Mail's quote colour (supports file attachments and optional `reply_html`) |
 
 ## How it works
 

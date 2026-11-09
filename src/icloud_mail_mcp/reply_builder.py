@@ -267,6 +267,22 @@ def html_inner_body(markup: str) -> str:
     return inner.strip()
 
 
+_BLACK = r"(?:black|windowtext|#000(?:000)?|rgba?\(\s*0\s*,\s*0\s*,\s*0\s*(?:,\s*1(?:\.0+)?\s*)?\))"
+_BLACK_CSS = re.compile(r"(?<![-\w])color\s*:\s*" + _BLACK + r"\s*(?:!important)?\s*;?", re.I)
+_BLACK_FONT_ATTR = re.compile(r"""(<font\b[^>]*?)\s+color\s*=\s*["']?""" + _BLACK + r"""["']?""", re.I)
+
+
+def strip_black_text(markup: str) -> str:
+    """Remove text colours that force black, as Apple Mail does when quoting.
+
+    Outlook writes color: rgb(0, 0, 0) / black on every span; left in place it
+    overrides the blue quote colour Apple Mail gives a <blockquote type="cite">.
+    Other colours (brand colours, links, backgrounds) stay.
+    """
+    markup = _BLACK_CSS.sub("", markup)
+    return _BLACK_FONT_ATTR.sub(r"\1", markup)
+
+
 _CID_REF = re.compile(r"""cid:([^"'\s>)]+)""", re.I)
 _IMG_TAG = re.compile(r"<img\b[^>]*>", re.I)
 
@@ -334,7 +350,9 @@ def build_reply(
     images = inline_images(original)
     used_cids: set[str] = set()
     if orig_html:
-        quote_inner, used_cids = drop_missing_cid_images(html_inner_body(orig_html), set(images))
+        quote_inner, used_cids = drop_missing_cid_images(
+            strip_black_text(html_inner_body(orig_html)), set(images)
+        )
     else:
         quote_inner = _plain_quote_html(orig_plain)
     html_doc = (
