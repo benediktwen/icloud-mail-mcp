@@ -143,6 +143,10 @@ are kept in memory only and every restart requires reconnecting the AI assistant
 
 A push to `main` runs the test suite (`pip install -e ".[test]" && pytest -q`) on GitHub Actions; only if it passes does the workflow deploy to the server. Run the same command locally before pushing.
 
+The Docker image installs the exact versions in `uv.lock`, checked by hash. After changing a dependency in `pyproject.toml`, run `uv lock` and commit the lockfile; `uv lock --upgrade` moves everything to the newest allowed versions.
+
+The container runs as an unprivileged user (UID/GID 1000 by default). The host directory mounted at `/state` must be owned by that UID. If your deploy user has a different UID, build with `--build-arg APP_UID=$(id -u) --build-arg APP_GID=$(id -g)`.
+
 ## Contributing
 
 This code was built with AI assistance ([Claude Code](https://claude.ai/code)) — vibe-coded with the best intentions. Security has been a priority throughout, but the code has not been independently audited. Use it at your own risk. If you spot a bug, a vulnerability, or an opportunity to improve anything, issues and pull requests are very welcome.
