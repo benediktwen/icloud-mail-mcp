@@ -470,7 +470,10 @@ class GitHubOAuthProvider(OAuthAuthorizationServerProvider):
 
         github_access_token = token_data.get("access_token")
         if not github_access_token:
-            logger.error("No access_token in GitHub response: %s", token_data)
+            logger.error(
+                "No access_token in GitHub response: error=%r description=%r",
+                token_data.get("error"), token_data.get("error_description"),
+            )
             return HTMLResponse("<h1>GitHub error</h1><p>No access token received.</p>", status_code=502)
 
         # Fetch GitHub user and enforce allowlist
@@ -607,6 +610,7 @@ class GitHubOAuthProvider(OAuthAuthorizationServerProvider):
             client_id=client.client_id,
             scopes=authorization_code.scopes,
             expires_at=int(time.time()) + REFRESH_TOKEN_TTL,
+            resource=authorization_code.resource,  # carried over on refresh (RFC 8707)
         )
         self._sweep(force=True)
         self._save_store()
@@ -652,6 +656,7 @@ class GitHubOAuthProvider(OAuthAuthorizationServerProvider):
             client_id=client.client_id,
             scopes=effective_scopes,
             expires_at=int(time.time()) + REFRESH_TOKEN_TTL,
+            resource=resource,
         )
         self._sweep(force=True)
         self._save_store()
