@@ -35,4 +35,6 @@ jobs:
             # The container runs as the host user (UID 1001), no longer as root.
             # Files the old root container wrote must belong to that user. Safe to repeat.
             sudo chown -R 1001:1001 /home/ubuntu/mcp-state/mail
-            docker compose up -d --build icloud-mail-mcp
+            # --pull: newest base image; APT_REFRESH: refresh the Debian packages once a week
+            docker compose build --pull --build-arg APT_REFRESH="$(date +%G-%V)" icloud-mail-mcp
+            docker compose up -d icloud-mail-mcp

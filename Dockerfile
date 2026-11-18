@@ -1,5 +1,14 @@
 FROM python:3.12-slim
 
+# Debian security fixes that the base image does not carry yet (e.g. zlib1g
+# CVE-2026-85091 on 2026-11-18). The deploy passes the current week as
+# APT_REFRESH, so this layer is rebuilt once a week instead of staying cached.
+ARG APT_REFRESH=none
+RUN echo "apt refresh: ${APT_REFRESH}" \
+ && apt-get update \
+ && apt-get upgrade -y \
+ && rm -rf /var/lib/apt/lists/*
+
 # Run as an unprivileged user. The bind-mounted /state (token store) must be
 # writable by this UID on the host; it defaults to 1000, the first user on Ubuntu.
 # Override at build time if your host differs (the server uses 1001):
